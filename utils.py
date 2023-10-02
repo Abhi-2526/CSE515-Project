@@ -27,17 +27,15 @@ def extract_hog_features(image):
     resized_image = resize(gray_image, (300, 100))
     
     # Compute the HOG features
-    features, hog_image = hog(resized_image, orientations=9, pixels_per_cell=(10, 10),
+    features, hog_image = hog(resized_image, orientations=9, pixels_per_cell=(10, 30),
                               cells_per_block=(1, 1), visualize=True)
     
     return features, hog_image 
-#Function to calculate the Resnet Layer Output 
-from torchvision import models, transforms
-from PIL import Image
-import torch
-import numpy as np
 
 
+
+
+#Function to calculate the Resnet Layer Output
 transform = transforms.Compose([
     transforms.Resize((224, 224)),  # Resize images to 224x224
     transforms.ToTensor(),  # Convert images to PyTorch tensors
@@ -45,6 +43,8 @@ transform = transforms.Compose([
                          [0.31415099, 0.30712622, 0.31878401]),  # Normalize the images
 ])
 
+
+#This function is to process the results of the complete Dataset 
 def resnet_computations(hook_layer, dataset):
     
     # List to store the output tensors for each image along with their ImageID
@@ -104,3 +104,53 @@ def resnet_computations(hook_layer, dataset):
     hook.remove()
     
     return outputs_with_ids
+#Resnet Computation Function for Single Image 
+
+def resnet_computations_single_image(hook_layer, image):
+    
+    # Prepare the image for processing
+    img_tensor = transform(image)
+    img_batch = img_tensor.unsqueeze(0)  # Add a batch dimension
+    
+    # List to temporarily capture the output tensor from the hook
+    captured_output = [None]
+
+    # Hook function to capture the output tensor of a specified layer
+    def capture_output(module, input, output):
+        captured_output[0] = output
+
+    # Register the hook function to the specified layer
+    if hook_layer == 'avgpool':
+        hook = resnet_model.avgpool.register_forward_hook(capture_output)
+    elif hook_layer == 'layer3':
+        hook = resnet_model.layer3.register_forward_hook(capture_output)
+    elif hook_layer == 'fc':   
+        hook = resnet_model.fc.register_forward_hook(capture_output)
+
+    # Forward pass (disable gradient computation to save memory)
+    with torch.no_grad():
+        resnet_model(img_batch)
+    
+    # Retrieve the captured output tensor
+    resnet_output = captured_output[0]
+    if resnet_output is None:
+        print("Warning: Hook Not Triggered")
+        return None
+
+    # Process the output tensor depending on the specified layer and store it in a dictionary
+    output_dict = {}
+    if hook_layer == 'avgpool':
+        avgpool_output = resnet_output.flatten().cpu().numpy()
+        averaged_values = [(avgpool_output[i] + avgpool_output[i+1]) / 2.0 for i in range(0, len(avgpool_output), 2)]
+        output_dict["Output"] = np.array(averaged_values)
+    elif hook_layer == 'layer3':
+        avg_vector = resnet_output.mean(dim=[2, 3]).cpu().numpy().squeeze()
+        output_dict["Output"] = avg_vector
+    elif hook_layer == 'fc':
+        output_dict["Output"] = resnet_output.cpu().numpy().squeeze()
+
+    # Remove the hook to free resources
+    hook.remove()
+
+    return output_dict
+
