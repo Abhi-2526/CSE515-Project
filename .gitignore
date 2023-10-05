@@ -1,0 +1,7 @@
+#Ignore Mac System File 
+.DS_Store
+#Ignore all CSV files 
+*.csv
+#Ignore all zip 
+*.zip
+*.mat
