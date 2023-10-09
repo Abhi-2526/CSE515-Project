@@ -42,7 +42,6 @@ def store_in_database(imageID, features):
 
     HOG_bytes = np.array(features['HOG'].tobytes())
 
-    # Reduce dimensionality of ResNet-AvgPool and ResNet-Layer3 features
     ResNetAvgPool1024 = np.array(features['AvgPool'])
     AvgPool_bytes = ResNetAvgPool1024.tobytes()
 
@@ -105,7 +104,7 @@ custom_transforms = transforms.Lambda(lambda x: custom_transform(x))
 
 # Define transformations for the image
 transform = transforms.Compose([
-    custom_transforms,  # Use the custom transforms here
+    custom_transforms,
     transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
@@ -133,7 +132,8 @@ def compute_cell_moments(image_np, start_row, end_row, start_col, end_col):
 def compute_color_moments_matrix(image_np):
     """Compute the 10x10 color moments matrix for the image."""
     if len(image_np.shape) == 2:  # Grayscale image
-        image_np = np.stack([image_np, image_np, image_np], axis=-1)  # Convert to RGB by repeating the channel 3 times
+        # Convert to RGB by repeating the channel 3 times
+        image_np = np.stack([image_np, image_np, image_np], axis=-1)  
 
     height, width, channels = image_np.shape
     cell_height, cell_width = height // 10, width // 10
