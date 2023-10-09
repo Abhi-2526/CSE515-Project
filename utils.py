@@ -6,11 +6,14 @@ from torchvision import transforms, models
 from torch.utils.data import DataLoader 
 from  torchvision.datasets import ImageFolder 
 import torchvision 
-from PIL import image
+# from PIL import image
 from skimage.feature import hog
 from skimage.color import rgb2gray
 from skimage.transform import resize
 from tqdm import tqdm 
+from scipy.stats import skew
+from PIL import Image
+
 resnet_model = models.resnet50(pretrained = True)
 
 def extract_hog_features(image):
@@ -27,7 +30,7 @@ def extract_hog_features(image):
     resized_image = resize(gray_image, (300, 100))
     
     # Compute the HOG features
-    features, hog_image = hog(resized_image, orientations=9, pixels_per_cell=(10, 30),
+    features, hog_image = hog(resized_image, orientations=9, pixels_per_cell=(30, 10),
                               cells_per_block=(1, 1), visualize=True)
     
     return features, hog_image 
@@ -70,7 +73,7 @@ def resnet_computations(hook_layer, dataset):
         img, label = dataset[i]
         #skipping grayscale images 
         if img.mode == 'L' or img.mode == '1':
-            continue
+            img = img.convert("RGB")
         # Apply transformations and prepare image batch
         img_tensor = transform(img)
         img_batch = img_tensor.unsqueeze(0)  # Add a batch dimension
@@ -108,6 +111,9 @@ def resnet_computations(hook_layer, dataset):
 
 def resnet_computations_single_image(hook_layer, image):
     
+    
+    # if image.mode == "L" or image.mode == '1':
+    #     image = image.convert("RGB")
     # Prepare the image for processing
     img_tensor = transform(image)
     img_batch = img_tensor.unsqueeze(0)  # Add a batch dimension
@@ -126,7 +132,6 @@ def resnet_computations_single_image(hook_layer, image):
         hook = resnet_model.layer3.register_forward_hook(capture_output)
     elif hook_layer == 'fc':   
         hook = resnet_model.fc.register_forward_hook(capture_output)
-
     # Forward pass (disable gradient computation to save memory)
     with torch.no_grad():
         resnet_model(img_batch)
@@ -154,3 +159,53 @@ def resnet_computations_single_image(hook_layer, image):
 
     return output_dict
 
+from PIL import Image
+
+#Load an image using PIL
+# image_path = "path_to_your_image.jpg"
+# image = Image.open(image_path)
+
+# Process the image and get the result
+result = resnet_computations_single_image('avgpool', image)
+
+if result is not None:
+    print(result)
+
+#Function to caluclate color moments for a singel image 
+def calculateColorMomentsSingleImage(image):
+    #Step 1: Resize the image 
+    new_size = (300,100)
+    img_resized = image.resize(new_size)
+
+    #Convert the PIL image to Numpy Array 
+    img_array = np.array(img_resized)
+
+    #Check for Grayscale 
+    is_gray = len(img_array.shape) == 2 
+
+    #Partition the image into a 10x10 grid 
+    for i in range(0,300,30):
+        for j in range(0,100,10):
+            grid_cell = img_array[j:j+10,i:i+30]
+
+            #Calculate color moments of each grid cell 
+            color_moments_dict = {} 
+            for color_channel, color_name in enumerate(['Gray'] if is_gray else['Red','Green','Blue']):
+                channel_data = grid_cell if is_gray else grid_cell[:, :, color_channel]
+
+                #Calculate Mean, SD and Skewness 
+                channel_mean = np.mean(channel_data)
+                channel_std = np.std(channel_data)
+                if np.all(channel_data == channel_data[0]):
+                    channel_skewness  = 0 
+                else :
+                    channel_skewness = np.skew(channel_data.reshape(-1))
+
+                #Store Color Moments in the dictionary 
+                color_moments_dict[f"{color_name}_Mean"] = channel_mean 
+                color_moments_dict[f"{color_name}_std"] = channel_std
+                color_moments_dict[f"{color_name}_skewness"] = channel_skewness
+                #Add all the calculated values from this grid-cell to the final list
+
+    return color_moments_dict
+ 
