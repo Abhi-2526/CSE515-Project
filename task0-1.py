@@ -7,6 +7,8 @@ from skimage.feature import hog
 from skimage.color import rgb2gray
 import numpy as np
 from PIL import Image
+from sklearn.decomposition import TruncatedSVD, NMF, LatentDirichletAllocation
+from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 import sqlite3
 
@@ -42,6 +44,7 @@ def store_in_database(imageID, features):
 
     HOG_bytes = np.array(features['HOG'].tobytes())
 
+    # Reduce dimensionality of ResNet-AvgPool and ResNet-Layer3 features
     ResNetAvgPool1024 = np.array(features['AvgPool'])
     AvgPool_bytes = ResNetAvgPool1024.tobytes()
 
@@ -104,7 +107,7 @@ custom_transforms = transforms.Lambda(lambda x: custom_transform(x))
 
 # Define transformations for the image
 transform = transforms.Compose([
-    custom_transforms,
+    custom_transforms,  # Use the custom transforms here
     transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
@@ -132,8 +135,7 @@ def compute_cell_moments(image_np, start_row, end_row, start_col, end_col):
 def compute_color_moments_matrix(image_np):
     """Compute the 10x10 color moments matrix for the image."""
     if len(image_np.shape) == 2:  # Grayscale image
-        # Convert to RGB by repeating the channel 3 times
-        image_np = np.stack([image_np, image_np, image_np], axis=-1)  
+        image_np = np.stack([image_np, image_np, image_np], axis=-1)  # Convert to RGB by repeating the channel 3 times
 
     height, width, channels = image_np.shape
     cell_height, cell_width = height // 10, width // 10
@@ -307,6 +309,71 @@ def task_1(query_label_name, feature_space, k):
     plt.show()
 
 
+def task_2a(imageID_or_file, feature_space, k):
+    load_features_from_database()
+    query_image = retrieve_image(imageID_or_file)
+    query_features = extract_features(query_image)[feature_space]
+    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+
+    label_scores = {}
+    for entry in database:
+        label_idx = entry["label"]
+        label_name = idx_to_label_name[int(label_idx)]
+        score = compare_features(query_features, entry["features"][feature_space])
+        if label_name in label_scores:
+            label_scores[label_name].append(score)
+        else:
+            label_scores[label_name] = [score]
+
+    # Average the scores for each label
+    avg_label_scores = {label: np.mean(scores) for label, scores in label_scores.items()}
+
+    # Get the top k labels
+    top_k_labels = sorted(avg_label_scores.items(), key=lambda x: x[1], reverse=True)[:k]
+
+    print("\nTop Matching Labels:")
+    for idx, (label, score) in enumerate(top_k_labels, start=1):
+        print(f"{idx}) Label - {label}, Score - {score:.2f}")
+
+
+def task_2b(imageID_or_file, k):
+    task_2a(imageID_or_file, "FCLayer", k)
+
+
+def task_3(feature_space, k, reduction_technique):
+    load_features_from_database()
+
+    # Extract features for all images in the database
+    all_features = [entry["features"][feature_space] for entry in database]
+    all_features_matrix = np.array(all_features)
+
+    # Apply the selected dimensionality reduction technique
+    if reduction_technique == "SVD":
+        svd = TruncatedSVD(n_components=k)
+        latent_semantics = svd.fit_transform(all_features_matrix)
+    elif reduction_technique == "NNMF":
+        nmf = NMF(n_components=k)
+        latent_semantics = nmf.fit_transform(all_features_matrix)
+    elif reduction_technique == "LDA":
+        lda = LatentDirichletAllocation(n_components=k)
+        latent_semantics = lda.fit_transform(all_features_matrix)
+    elif reduction_technique == "k-means":
+        kmeans = KMeans(n_clusters=k, random_state=0)
+        kmeans.fit(all_features_matrix)
+        latent_semantics = kmeans.cluster_centers_
+
+    # Store the latent semantics in an output file
+    output_filename = f"{feature_space}_{reduction_technique}_latent_semantics.txt"
+    with open(output_filename, 'w') as f:
+        for i, entry in enumerate(database):
+            imageID = entry["imageID"]
+            weights = latent_semantics[i]
+            formatted_weights = [float(w) for w in weights]
+            f.write(f"ImageID: {imageID}, Weights: {formatted_weights}\n")
+
+    print(f"Latent semantics stored in {output_filename}")
+
+
 def retrieve_image(imageID_or_file):
     if isinstance(imageID_or_file, int):
         return dataset[imageID_or_file][0]
@@ -342,11 +409,11 @@ def compare_features(query_features, database_features):
     return similarity
 
 
-choice = str(input("Please enter the task you want to execute (0a/0b/1): "))
+choice = str(input("Please enter the task you want to execute (0a/0b/1/2a/2b/3/4): "))
 feature_space = None
-if (choice == "a") or (choice == "0a"):
+if choice == "0a":
     task_0a()
-elif (choice == "b") or (choice == "0b"):
+elif choice == "0b":
     imageID = input("Enter the ImageId or provide Image Path: ")
     if imageID.isnumeric():
         imageID = int(imageID)
@@ -386,5 +453,65 @@ elif choice == "1":
             print("Wrong feature space selected!")
         k = int(input("Enter the number of relevant images you want: "))
         task_1(label_name, feature_space, k)
+
+elif choice == "2a":
+    imageID = input("Enter the ImageId or provide Image Path: ")
+    if imageID.isnumeric():
+        imageID = int(imageID)
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    if feature_in == 1:
+        feature_space = "ColorMoments"
+    elif feature_in == 2:
+        feature_space = "HOG"
+    elif feature_in == 3:
+        feature_space = "AvgPool"
+    elif feature_in == 4:
+        feature_space = "Layer3"
+    elif feature_in == 5:
+        feature_space = "FCLayer"
+    else:
+        print("Wrong feature space selected!")
+    k = int(input("Enter the number of top labels you want: "))
+    task_2a(imageID, feature_space, k)
+
+elif choice == "2b":
+    imageID = input("Enter the ImageId or provide Image Path: ")
+    if imageID.isnumeric():
+        imageID = int(imageID)
+    k = int(input("Enter the number of top labels you want: "))
+    task_2b(imageID, k)
+
+elif choice == "3":
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    if feature_in == 1:
+        feature_space = "ColorMoments"
+    elif feature_in == 2:
+        feature_space = "HOG"
+    elif feature_in == 3:
+        feature_space = "AvgPool"
+    elif feature_in == 4:
+        feature_space = "Layer3"
+    elif feature_in == 5:
+        feature_space = "FCLayer"
+    else:
+        print("Wrong feature space selected!")
+        exit()
+
+    k = int(input("Enter the number of latent semantics you want: "))
+    reduction_in = int(input(
+        "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
+    if reduction_in == 1:
+        reduction_technique = "SVD"
+    elif reduction_in == 2:
+        reduction_technique = "NNMF"
+    elif reduction_in == 3:
+        reduction_technique = "LDA"
+    elif reduction_in == 4:
+        reduction_technique = "k-means"
+    else:
+        print("Invalid choice for reduction technique!")
+        exit()
+
+    task_3(feature_space, k, reduction_technique)
 
 conn.close()
