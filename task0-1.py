@@ -195,7 +195,9 @@ def extract_features(image):
 
     layer3_output = outputs['Sequential'].squeeze().numpy()
     layer3_output_flattened = layer3_output.reshape(-1)
-    layer3_1024 = (layer3_output_flattened[::2] + layer3_output_flattened[1::2]) / 2
+    stride = len(layer3_output_flattened) // 1024
+    layer3_1024 = [np.mean(layer3_output_flattened[i:i + stride]) for i in
+                   range(0, len(layer3_output_flattened), stride)]
 
     fc_1000 = outputs['Linear'].squeeze().numpy()
 
@@ -340,12 +342,23 @@ def task_2b(imageID_or_file, k):
     task_2a(imageID_or_file, "FCLayer", k)
 
 
+def get_top_k_weights(image_weights, k):
+    sorted_indices = np.argsort(image_weights)[::-1][:k]
+    top_k_weights = image_weights[sorted_indices]
+    output = f"ImageID: {sorted_indices[0]}, Weights: {top_k_weights.tolist()}"
+
+    return output
+
+
 def task_3(feature_space, k, reduction_technique):
     load_features_from_database()
 
     # Extract features for all images in the database
     all_features = [entry["features"][feature_space] for entry in database]
     all_features_matrix = np.array(all_features)
+    min_val = np.min(all_features_matrix)
+    if min_val < 0:
+        all_features_matrix -= min_val
 
     # Apply the selected dimensionality reduction technique
     if reduction_technique == "SVD":
@@ -360,6 +373,7 @@ def task_3(feature_space, k, reduction_technique):
     elif reduction_technique == "k-means":
         kmeans = KMeans(n_clusters=k, random_state=0)
         kmeans.fit(all_features_matrix)
+        cluster_labels = kmeans.predict(all_features_matrix)
         latent_semantics = kmeans.cluster_centers_
 
     # Store the latent semantics in an output file
@@ -367,9 +381,13 @@ def task_3(feature_space, k, reduction_technique):
     with open(output_filename, 'w') as f:
         for i, entry in enumerate(database):
             imageID = entry["imageID"]
-            weights = latent_semantics[i]
-            formatted_weights = [float(w) for w in weights]
-            f.write(f"ImageID: {imageID}, Weights: {formatted_weights}\n")
+            if reduction_technique == "k-means":
+                distances_to_centers = [np.linalg.norm(entry["features"][feature_space] - center) for center in latent_semantics]
+                f.write(f"ImageID: {imageID}, Weights: {distances_to_centers}\n")
+            else:
+                weights = latent_semantics[i]
+                formatted_weights = [float(w) for w in weights]
+                f.write(f"ImageID: {imageID}, Weights: {formatted_weights}\n")
 
     print(f"Latent semantics stored in {output_filename}")
 
