@@ -14,6 +14,7 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from tensorly.decomposition import parafac
 import sqlite3
+import pandas as pd
 
 warnings.simplefilter(action='ignore', category=Warning)
 
@@ -89,7 +90,7 @@ def load_features_from_database():
 
 
 # Load Caltech101 dataset
-dataset = Caltech101(root="./data", download=True)
+dataset = Caltech101(root="/Users/abhinav/Desktop/CSE515-Project", download=True)
 
 # Extract class names from the Caltech101 dataset
 label_name_to_idx = {name: idx for idx, name in enumerate(dataset.categories)}
@@ -519,7 +520,6 @@ def normalize_factors(factors):
 
 def task_4(feature_space, k):
     load_features_from_database()
-
     # Create a tensor of shape (number of images, number of features, number of labels)
     num_images = len(database)
     num_features = len(database[0]["features"][feature_space])
@@ -528,59 +528,43 @@ def task_4(feature_space, k):
     tensor = np.zeros((num_images, num_features, num_labels))
 
     for idx, entry in enumerate(database):
-        imageID = entry["imageID"]
         label_idx = int(entry["label"])
         tensor[idx, :, label_idx] = entry["features"][feature_space]
 
     # Perform CP decomposition
-    weights, factors = parafac(tensor, rank=k, n_iter_max=100, normalize_factors=True, init='random', svd='numpy')
+    weights, factors = parafac(tensor, rank=k)
 
-    sorted_indices = np.argsort(weights)[::-1]
+    label_weights = factors[2]
 
-    # Extract the label weights
-    weights = weights[sorted_indices]
+    # Sort the weights and associate with labels
+    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+    df = pd.DataFrame(label_weights)
+    df.index = df.index.map(idx_to_label_name)
+
+    # Save to csv
+    k = df.shape[1]
+    filename = f"latent_semantics_{k}_components.csv"
+    df.to_csv(filename)
+    print(f"Data saved to {filename}")
+
+    # Compute label-weight pairs
+    label_weights = df.sum(axis=1)
+    sorted_labels = label_weights.sort_values(ascending=False).index.tolist()
+    sorted_weights = label_weights.sort_values(ascending=False).values.tolist()
+    label_weight_pairs = [{'label': label, 'weight': weight} for label, weight in zip(sorted_labels, sorted_weights)]
+
+    # Display the label-weight pairs
+    for pair in label_weight_pairs:
+        print(f"Label: {pair['label']}, Weight: {pair['weight']}")
 
     # Store the latent semantics in an output file
     output_filename = f"T4-{feature_space}-{k}.json"
-    latent_semantics_list = np.real(factors[1][:, sorted_indices[:k]]) * weights
-    latent_semantics_list = latent_semantics_list.tolist()
-
-    print(latent_semantics_list)
-
-    latent_semantics_dict = {}
-
-    for idx, entry in enumerate(database):
-        imageID = entry["imageID"]
-
-        # Convert the NumPy array for this imageID to a Python list
-        latent_semantics_for_image = latent_semantics_list[idx].tolist()
-
-        latent_semantics_dict[imageID] = latent_semantics_for_image
-
-    print(latent_semantics_dict)
 
     # Save to JSON
     with open(output_filename, 'w') as f:
-        json.dump(latent_semantics_dict, f, indent=4)
+        json.dump(label_weight_pairs, f, indent=4)
 
     print(f"Latent semantics stored in {output_filename}")
-    # for i in range(k):
-    #     sorted_indices = np.argsort(weights)[::-1]
-    #
-    #     semantic_entry = {"LatentSemantic": i + 1, "Labels": {}}
-    #     for idx in sorted_indices:
-    #         label_name = list(label_name_to_idx.keys())[list(label_name_to_idx.values()).index(idx)]
-    #         semantic_entry["Labels"][label_name] = f"{weights[idx]:.4f}"
-    #
-    #     latent_semantics_list.append(semantic_entry)
-
-    # print(latent_semantics_list)
-    # # Save to JSON
-    # with open(output_filename, 'w') as f:
-    #     json.dump(latent_semantics_list, f, indent=4)
-    #
-    # print(f"Latent semantics stored in {output_filename}")
-
 
 def task_5(feature_space, k, reduction_technique):
     load_features_from_database()
@@ -945,7 +929,24 @@ def compare_features(query_features, database_features):
     return similarity
 
 
-choice = str(input("Please enter the task you want to execute (0a/0b/1/2a/2b/3/4/5/6/7/8/9/10/11): "))
+choice = str(input(
+    "Please enter the task you want to execute:\n"
+    "0a\n"
+    "0b\n"
+    "1\n"
+    "2a\n"
+    "2b\n"
+    "3\n"
+    "4\n"
+    "5\n"
+    "6\n"
+    "7\n"
+    "8\n"
+    "9\n"
+    "10\n"
+    "11\n"
+    ": "
+))
 feature_space = None
 if choice == "0a":
     task_0a()
