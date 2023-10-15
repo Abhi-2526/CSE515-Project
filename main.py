@@ -1229,7 +1229,7 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
         input_path = base_path+label+".png"
         img = imread(input_path)
 
-    elif mode in[ "FC", 'T3-CM-5-SVD']:
+    else:
 
         image_id = label_id # 100, 55, 20, 0
         
@@ -1270,6 +1270,8 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
         # Create a graph.
         G = nx.Graph()
         # target_description = descriptor_fun(input_path)
+        support_latent_list = ["T3-CM-5-SVD", "T3-HOG-5-LDA", "T3-HOG-5-SVD" , "T3-CM-10-LDA", "T3-CM-10-SVD",
+                     "T3-HOG-10-LDA", "T3-HOG-1-LDA", "T3-HOG-1-SVD"]
         
         if mode == "HOGs":
             data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_HOGs.pt")
@@ -1290,10 +1292,10 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
             data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_fclayer_1000.pt")[0:500]
             image_data = data[image_id][1]
             # descriptor_fun = descriptor_moments
+        
+        elif mode in support_latent_list:
             
-        elif mode == "T3-CM-5-SVD":
-            
-            file_name = "./T3-CM-5-SVD.csv"
+            file_name = "./"+mode+".csv"
             csv_data = pd.read_csv(file_name, sep=",", header=0)
             length = csv_data.shape[0]
             # transfer from origin structure to unified level:
@@ -1321,7 +1323,7 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
                 # the data set directly contains the FC output (1, 1000), so we take [0] ==> (1000,)
                 node_now = descrip.detach().numpy()[0]
 
-            elif mode == "T3-CM-5-SVD":
+            elif mode in support_latent_list:
                 node_now = descrip[0]
 
             for id_now, description in data:
@@ -1333,12 +1335,12 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
                 elif mode == "FC":
                     # evaluate_list.append((id, Euclidean_Distance(image_data.detach().numpy(), description_new.detach().numpy())))
                     evaluate_list.append((id_now, np.corrcoef(image_data.detach().numpy()[0], description.detach().numpy()[0])[0, 1]))
-                elif mode == "T3-CM-5-SVD":
+                elif mode in support_latent_list:
                     evaluate_list.append((id_now, np.corrcoef(image_data, description)[0, 1]))
 
             if mode == "HOGs": # distance = Euclidean distance
                 sorted_data = sorted(evaluate_list, key=lambda x:x[1])
-            elif mode in ["FC", "T3-CM-5-SVD"]:
+            else: # mode in ["FC"] + support_latent_list
                 sorted_data = sorted(evaluate_list, key=lambda x:x[1], reverse=True)
             
             selected_result = sorted_data[:value_n]
@@ -1379,7 +1381,7 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
             plt.subplot(1, value_m, counter) # 1 row
             if mode in ["HOGs" or "moments"] :
                     plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
-            elif mode in ["FC", "T3-CM-5-SVD"]:
+            elif mode in support_latent_list:
                 selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                 plt.imshow(np.transpose(selected_image, (1, 2, 0)))
             counter += 1 
@@ -1393,7 +1395,7 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
                 print(counter)
                 if mode in ["HOGs" or "moments"] :
                     plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
-                elif mode in ["FC", "T3-CM-5-SVD"]:
+                elif mode in support_latent_list:
                     selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                     plt.imshow(np.transpose(selected_image, (1, 2, 0)))
 
@@ -1622,6 +1624,7 @@ def compare_features(query_features, database_features):
     similarity = dot_product / (norm_a * norm_b)
     return similarity
 
+# try:
 while True:
     choice = str(input("Please enter the task you want to execute (0a/0b/1/2a/2b/3/4/5/6/7/8/9/10/11): "))
     feature_space = None
@@ -1862,7 +1865,10 @@ while True:
             label= input("Enter the label id (0, 20, 55, 100): ")
             get_m = input("Enter m significant images you want to get (5): ") # m = 5
             get_n = input("Enter n similar images you want in PageRank (10): ") # n = 10
-            get_mode = input("Select mode: T3-CM-5-SVD / FC:")
+            sup_list = ["T3-CM-5-SVD", "T3-HOG-5-LDA", "T3-HOG-5-SVD" , "T3-CM-10-LDA", "T3-CM-10-SVD",
+                     "T3-HOG-10-LDA", "T3-HOG-1-LDA", "T3-HOG-1-SVD", "FC", "..."]
+            print("Current support latent list: "+ str(sup_list))
+            get_mode = input("Select mode: T3-CM-5-SVD / FC ... :")
             current_graph = input("Use pre-constructed graph? True/False:")
 
             if current_graph == "True":
@@ -1876,10 +1882,14 @@ while True:
             src = input("Enter the image absolute path: ")
             get_m = input("Enter m significant images you want to get (5): ") # m = 5
             get_n = input("Enter n similar images you want in PageRank (10): ") # n = 10
-            get_mode = input("Select mode: T3-CM-5-SVD / FC:")
+            # get_mode = input("Select mode: T3-CM-5-SVD / FC ... :")
+            print("Using default mode: FC...")
             choice = False # constructe new one
             
-            task_11_extra(label_src=src, m = int(get_m), n = int(get_n), in_mode = get_mode, use_current_graph = choice)
+            task_11_extra(label_src=src, m = int(get_m), n = int(get_n), in_mode = "FC", use_current_graph = choice)
             # task_11_extra(label_src="/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase2/CSE515-Project/data/extraImg/Dwayne_Johnson.jpeg", m = 5, n = 10, in_mode = "FC", use_current_graph = choice)
 
     conn.close()
+
+# except Exception as e:
+#     print(e)
