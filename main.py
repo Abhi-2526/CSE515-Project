@@ -119,7 +119,6 @@ transform = transforms.Compose([
 
 
 def compute_cell_moments(image_np, start_row, end_row, start_col, end_col):
-    """Compute the color moments for a specific cell in the image grid."""
     cell_values = image_np[start_row:end_row, start_col:end_col]
     total_pixels = cell_values.shape[0] * cell_values.shape[1]
 
@@ -245,7 +244,7 @@ def task_0b(imageID_or_file, feature_space, k):
     plt.figure(figsize=(15, 5))
 
     # Display the query image
-    plt.subplot(1, k + 1, 1)  # +1 for the query image
+    plt.subplot(1, k + 1, 1)
     plt.imshow(query_image)
     plt.title("Query Image")
     plt.axis('off')
@@ -271,8 +270,11 @@ def get_image_ids_for_label(label_name):
     return [i for i, (img, lbl) in enumerate(dataset) if lbl == label_idx]
 
 
-def task_1(query_label_name, feature_space, k):
+def task_1(query_label_idx, feature_space, k):
     load_features_from_database()
+    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+
+    query_label_name = idx_to_label_name[int(query_label_idx)]
 
     # Get all image IDs for the given label name
     relevant_image_ids = get_image_ids_for_label(query_label_name)
@@ -457,16 +459,19 @@ def task_3(feature_space, k, reduction_technique):
 
     # Apply the selected dimensionality reduction technique
     if reduction_technique == "SVD":
-        U_k, Sigma_k, Vt_k = truncated_svd(all_features_matrix, k)
-        latent_semantics = np.dot(all_features_matrix, Vt_k.T)
+        svd = TruncatedSVD(n_components=k)
+        latent_semantics = svd.fit_transform(all_features_matrix)
     elif reduction_technique == "NNMF":
-        W, H = nnmf(all_features_matrix, k)
-        latent_semantics = W
+        nmf = NMF(n_components=k)
+        latent_semantics = nmf.fit_transform(all_features_matrix)
     elif reduction_technique == "LDA":
         lda = LatentDirichletAllocation(n_components=k)
         latent_semantics = lda.fit_transform(all_features_matrix)
     elif reduction_technique == "k-means":
-        latent_semantics, cluster_labels = kmeans_clustering(all_features_matrix, k)
+        kmeans = KMeans(n_clusters=k, random_state=0)
+        kmeans.fit(all_features_matrix)
+        cluster_labels = kmeans.predict(all_features_matrix)
+        latent_semantics = kmeans.cluster_centers_
 
     # Store the latent semantics in an output file
     output_filename = f"T3-{feature_space}-{k}-{reduction_technique}.json"
@@ -486,6 +491,19 @@ def task_3(feature_space, k, reduction_technique):
             data_entry["Weights"] = formatted_weights
 
         latent_semantics_data.append(data_entry)
+
+    # print(latent_semantics_data)
+    max_latent = []
+    for i in range(k):
+        max = 0
+        for j in latent_semantics_data:
+            if j["Weights"][i] > max:
+                max = j["Weights"][i]
+                image = j["ImageID"]
+        max_latent.append([image, max])
+
+    for i in range(k):
+        print(f"Latent Semantic {i + 1} - ImageID - {max_latent[i][0]} - {max_latent[i][1]}")
 
     def default_serialize(o):
         if isinstance(o, np.float32):
@@ -613,9 +631,15 @@ def task_5(feature_space, k, reduction_technique):
         svd = TruncatedSVD(n_components=k)
         latent_semantics = svd.fit_transform(label_similarity_matrix)
     elif reduction_technique == "NNMF":
+        min_val = np.min(label_similarity_matrix)
+        if min_val < 0:
+            label_similarity_matrix -= min_val
         nmf = NMF(n_components=k)
         latent_semantics = nmf.fit_transform(label_similarity_matrix)
     elif reduction_technique == "LDA":
+        min_val = np.min(label_similarity_matrix)
+        if min_val < 0:
+            label_similarity_matrix -= min_val
         lda = LatentDirichletAllocation(n_components=k)
         latent_semantics = lda.fit_transform(label_similarity_matrix)
     elif reduction_technique == "k-means":
@@ -676,41 +700,51 @@ def task_6(feature_space, k, reduction_technique):
 
     # Apply the selected dimensionality reduction technique
     if reduction_technique == "SVD":
-        U_k, Sigma_k, Vt_k = truncated_svd(image_similarity_matrix, k)
-        latent_semantics = np.dot(image_similarity_matrix, Vt_k.T)
+        svd = TruncatedSVD(n_components=k)
+        latent_semantics = svd.fit_transform(image_similarity_matrix)
     elif reduction_technique == "NNMF":
-        W, H = nnmf(image_similarity_matrix, k)
-        latent_semantics = W
+        min_val = np.min(image_similarity_matrix)
+        if min_val < 0:
+            image_similarity_matrix -= min_val
+        nmf = NMF(n_components=k)
+        latent_semantics = nmf.fit_transform(image_similarity_matrix)
     elif reduction_technique == "LDA":
+        min_val = np.min(image_similarity_matrix)
+        if min_val < 0:
+            image_similarity_matrix -= min_val
         lda = LatentDirichletAllocation(n_components=k)
         latent_semantics = lda.fit_transform(image_similarity_matrix)
     elif reduction_technique == "k-means":
-        latent_semantics, cluster_labels = kmeans_clustering(image_similarity_matrix, k)
+        kmeans = KMeans(n_clusters=k, random_state=0)
+        kmeans.fit(image_similarity_matrix)
+        cluster_labels = kmeans.predict(image_similarity_matrix)
+        latent_semantics = kmeans.cluster_centers_
 
     # Store the latent semantics in an output file
     output_filename = f"T6-{feature_space}-{k}-{reduction_technique}.json"
-    latent_semantics_list = []
+    latent_semantics_data = []
 
-    for i in range(k):
+    for i, entry in enumerate(database):
+        imageID = entry["imageID"]
+        data_entry = {"ImageID": imageID}
+
         if reduction_technique == "k-means":
-            weights = latent_semantics[i]
+            distances_to_centers = [np.linalg.norm(image_similarity_matrix[i] - center) for center in latent_semantics]
+            data_entry["Weights"] = distances_to_centers
         else:
-            weights = latent_semantics[:, i]
-        sorted_indices = np.argsort(weights)[::-1]
+            weights = latent_semantics[i]
+            formatted_weights = [float(w) for w in weights]
+            data_entry["Weights"] = formatted_weights
 
-        semantic_entry = {"LatentSemantic": i + 1, "Images": []}
-        for idx in sorted_indices:
-            image_data = {
-                "ImageID": database[idx]['imageID'],
-                "Weight": f"{weights[idx]:.4f}"
-            }
-            semantic_entry["Images"].append(image_data)
+        latent_semantics_data.append(data_entry)
 
-        latent_semantics_list.append(semantic_entry)
+    def default_serialize(o):
+        if isinstance(o, np.float32):
+            return float(o)
+        raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
-    # Save to JSON
     with open(output_filename, 'w') as f:
-        json.dump(latent_semantics_list, f, indent=4)
+        json.dump(latent_semantics_data, f, indent=4, default=default_serialize)
 
     print(f"Latent semantics stored in {output_filename}")
 
@@ -748,7 +782,7 @@ def task_7(imageID, latent_semantics_file, k):
 
     print("\nSimilar Images under the selected latent space: ")
     for idx, (matched_imageID, score) in enumerate(sorted_similarities):
-        print(f"{idx}) Image_ID - {matched_imageID}, Score - {score}")
+        print(f"{idx}) Image_ID - {matched_imageID}, Score - {score:.4f}")
 
     # Create a new figure
     plt.figure(figsize=(15, 5))
@@ -764,7 +798,7 @@ def task_7(imageID, latent_semantics_file, k):
         image = dataset[matched_imageID][0]  # Retrieve the image using the matched_imageID
         plt.subplot(1, k + 1, idx)
         plt.imshow(image)
-        plt.title(f"ID: {matched_imageID}\nScore: {score}")
+        plt.title(f"ID: {matched_imageID}\nScore: {score:.4f}")
         plt.axis('off')
 
     plt.tight_layout()
@@ -783,8 +817,6 @@ def get_label_for_image(image_id):
 
 def task_8(imageID, latent_semantics_file, k):
     load_features_from_database()
-
-    # Assuming you have a function `get_label_for_image` to retrieve the label for a given imageID or filename
     image_label = get_label_for_image(imageID)
 
     # Load the latent semantics from the provided JSON file
@@ -793,54 +825,82 @@ def task_8(imageID, latent_semantics_file, k):
 
     # Extract the latent semantic corresponding to the given image label
     image_latent_semantic = None
-    for entry in latent_semantics_data:
-        if entry["Labels"].get(image_label):
-            image_latent_semantic = entry["Labels"][image_label]
-            break
 
-    if not image_latent_semantic:
-        print(f"Latent semantic for label {image_label} not found in the provided file!")
-        return
+    # if not image_latent_semantic:
+    #     print(f"Latent semantic for label {image_label} not found in the provided file!")
+    #     return
 
     # Compute similarities between the image label latent semantic and the latent semantics of all labels
-    similarities = {}
-    count = {}
-    for entry in latent_semantics_data:
-        for label, score in entry["Labels"].items():
-            similarity = abs(image_latent_semantic - score)
-            if label in similarities:
-                similarities[label] += similarity
-                count[label] += 1
-            else:
-                similarities[label] = similarity
-                count[label] = 1
-            # similarities[label] = similarity
+    similarities = []
+    if "T5" in latent_semantics_file:
+        for entry in latent_semantics_data:
+            if entry["Labels"].get(image_label):
+                image_latent_semantic = entry["Labels"][image_label]
+                break
 
-    average_scores = {label: similarities[label] / count[label] for label in similarities}
+        for entry in latent_semantics_data:
+            for label, score in entry["Labels"].items():
+                similarity = abs(image_latent_semantic - score)
+                similarities.append((label, similarity))
 
-    print(average_scores)
-    # Sort labels based on similarity
-    sorted_similarities = sorted(average_scores, key=lambda x: x[1])[:k]
-    print(sorted_similarities)
+        # Sort labels based on similarity
+        sorted_similarities = sorted(similarities, key=lambda x: x[1])[:k]
 
-    # print("\nMost likely matching labels under the selected latent space: ")
-    # for label, score in average_scores:
-    #     print(f"Label - {label}, Score - {score:.4f}")
+        print("\nTop k matching labels under the selected latent space: ")
+        for label, score in sorted_similarities:
+            print(f"Label: {label}, Score: {score:.4f}")
+
+    elif "T6" in latent_semantics_file:
+        for entry in latent_semantics_data:
+            if entry["ImageID"] == imageID:
+                target_weights = entry["Weights"]
+                break
+            # image_latent_semantic = entry["ImageID"][imageID]
+            # break
+
+        # weight_differences = {}
+        # for image in latent_semantics_data:
+        #     if image["ImageID"] != imageID:
+        #         differences = [abs(a - b) for a, b in zip(target_weights, image["Weights"])]
+        #         weight_differences[image["ImageID"]] = differences
+        weight_differences = {}
+        for image in latent_semantics_data:
+            if image["ImageID"] != imageID:
+                differences = [abs(a - b) for a, b in zip(target_weights, image["Weights"])]
+                mean_difference = sum(differences) / len(differences)  # Calculate the mean of the differences
+                weight_differences[image["ImageID"]] = mean_difference
+
+        sorted_images = sorted(weight_differences.items(), key=lambda x: x[1])
+        extended_k = k * 20
+        top_k_images = [{"ImageID": image[0], "Score": image[1]} for image in sorted_images[:extended_k]]
+
+        # Get labels for the top k images
+        labels = [get_label_for_image(image["ImageID"]) for image in top_k_images]
+        scores = [image["Score"] for image in top_k_images]
+        scores.sort()
+
+        print("\n")
+        # Sort labels based on the image's score and select the top 5 unique labels
+        sorted_labels = sorted(set(labels), key=lambda x: labels.count(x), reverse=True)[:k]
+        for i in range(len(sorted_labels)):
+            print(f"Label: {sorted_labels[i]}, Score: {scores[i+1]:.7f}")
 
 
-def task_9(label, latent_semantics_file, k):
+def task_9(label_id, latent_semantics_file, k):
     # Load the latent semantics from the provided file
+    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+    label = idx_to_label_name[int(label_id)]
+
     with open(f"{latent_semantics_file}.json", 'r') as f:
         latent_semantics_data = json.load(f)
 
     # Extract the weights for the given label
     for entry in latent_semantics_data:
-        if entry["LatentSemantic"] == latent_semantics_file:
-            label_weights = entry["Labels"].get(label)
-            break
-    else:
-        print(f"Label {label} not found in the provided latent semantics file!")
-        return
+        label_weights = entry["Labels"].get(label)
+        break
+    # else:
+    #     print(f"Label {label} not found in the provided latent semantics file!")
+    #     return
 
     # Calculate the difference between the given label's weights and all other labels' weights
     differences = {}
@@ -859,21 +919,20 @@ def task_9(label, latent_semantics_file, k):
     return sorted_differences[:k]
 
 
-def task_10(label, latent_semantics_file, k):
+def task_10(label_id, latent_semantics_file, k):
     # Load the latent semantics from the provided file
+    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+    label = idx_to_label_name[int(label_id)]
+
     with open(f"{latent_semantics_file}.json", 'r') as f:
         latent_semantics_data = json.load(f)
 
     # Extract the weights for the given label
     for entry in latent_semantics_data:
-        if entry["LatentSemantic"] == latent_semantics_file:
-            label_weights = entry["Labels"].get(label)
-            break
-    else:
-        print(f"Label {label} not found in the provided latent semantics file!")
-        return
+        label_weights = entry["Labels"].get(label)
+        break
 
-    for name,idx in label_name_to_idx.items():
+    for name, idx in label_name_to_idx.items():
         if name == label:
             label_idx = idx
 
@@ -970,25 +1029,22 @@ elif choice == "0b":
     task_0b(imageID, feature_space, k)
 
 elif choice == "1":
-    label_name = input("Enter the label name (Ex- 'Motorbikes', 'Faces'): ")
-    if label_name not in label_name_to_idx:
-        print(f"Label name '{label_name}' not found. Please enter a valid label name.")
+    label_name = input("Enter the label id: ")
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    if feature_in == 1:
+        feature_space = "ColorMoments"
+    elif feature_in == 2:
+        feature_space = "HOG"
+    elif feature_in == 3:
+        feature_space = "AvgPool"
+    elif feature_in == 4:
+        feature_space = "Layer3"
+    elif feature_in == 5:
+        feature_space = "FCLayer"
     else:
-        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
-        if feature_in == 1:
-            feature_space = "ColorMoments"
-        elif feature_in == 2:
-            feature_space = "HOG"
-        elif feature_in == 3:
-            feature_space = "AvgPool"
-        elif feature_in == 4:
-            feature_space = "Layer3"
-        elif feature_in == 5:
-            feature_space = "FCLayer"
-        else:
-            print("Wrong feature space selected!")
-        k = int(input("Enter the number of relevant images you want: "))
-        task_1(label_name, feature_space, k)
+        print("Wrong feature space selected!")
+    k = int(input("Enter the number of relevant images you want: "))
+    task_1(label_name, feature_space, k)
 
 elif choice == "2a":
     imageID = input("Enter the ImageId or provide Image Path: ")
@@ -1155,14 +1211,14 @@ elif choice == "8":
     task_8(imageID, latent_semantic, k)
 
 elif choice == "9":
-    label = input("Enter the label: ")
+    label = input("Enter the label id: ")
     label_latent_semantic = input("Enter the Label's latent semantic file you want to use: ")
     k = int(input("Enter the number of similar labels you want: "))
 
     task_9(label, label_latent_semantic, k)
 
 elif choice == "10":
-    label = input("Enter the label: ")
+    label = input("Enter the label id: ")
     label_latent_semantic = input("Enter the Label's latent semantic you want to use: ")
     k = int(input("Enter the number of relevant images you want: "))
 
