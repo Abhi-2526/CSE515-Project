@@ -7,3 +7,4 @@
 *.mat
 *.db
 image_features.db
+data/caltech101/
