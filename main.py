@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS features (
     HOG BLOB,
     AvgPool BLOB,
     Layer3 BLOB,
-    FCLayer BLOB
+    FCLayer BLOB,
+    RESNET BLOB
 )
 ''')
 
@@ -50,11 +51,10 @@ def store_in_database(imageID, features):
     # Reduce dimensionality of ResNet-AvgPool and ResNet-Layer3 features
     ResNetAvgPool1024 = np.array(features['AvgPool'])
     AvgPool_bytes = ResNetAvgPool1024.tobytes()
-
     ResNetLayer31024 = np.array(features['Layer3'])
     Layer3_bytes = ResNetLayer31024.tobytes()
-
     FCLayer_bytes = features['FCLayer'].tobytes()
+    ResNetOutput_bytes = features['RESNET'].tobytes()
 
     # Check if imageID already exists in the database
     cursor.execute("SELECT 1 FROM features WHERE imageID=?", (imageID,))
@@ -63,16 +63,16 @@ def store_in_database(imageID, features):
     if not exists:
         # Insert a new record if imageID doesn't exist
         cursor.execute('''
-        INSERT INTO features (imageID, label, ColorMoments, HOG, AvgPool, Layer3, FCLayer)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO features (imageID, label, ColorMoments, HOG, AvgPool, Layer3, FCLayer, RESNET)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            imageID, label, ColorMoments_bytes, HOG_bytes, AvgPool_bytes, Layer3_bytes, FCLayer_bytes))
+            imageID, label, ColorMoments_bytes, HOG_bytes, AvgPool_bytes, Layer3_bytes, FCLayer_bytes, ResNetOutput_bytes))
 
         conn.commit()
 
 
 def load_features_from_database():
-    cursor.execute("SELECT imageID, label, ColorMoments, HOG, AvgPool, Layer3, FCLayer FROM features")
+    cursor.execute("SELECT imageID, label, ColorMoments, HOG, AvgPool, Layer3, FCLayer, RESNET FROM features")
     rows = cursor.fetchall()
     for row in rows:
         database.append({
@@ -83,7 +83,8 @@ def load_features_from_database():
                 "HOG": np.frombuffer(row[3], dtype=np.float32),
                 "AvgPool": np.frombuffer(row[4], dtype=np.float32),
                 "Layer3": np.frombuffer(row[5], dtype=np.float32),
-                "FCLayer": np.frombuffer(row[6], dtype=np.float32)
+                "FCLayer": np.frombuffer(row[6], dtype=np.float32),
+                "RESNET": np.frombuffer(row[7], dtype=np.float32)
             }
         })
 
@@ -186,7 +187,7 @@ def extract_features(image):
     # Extract features using RESNET50
     image_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
-        resnet50(image_tensor)
+        resnet_output = resnet50(image_tensor)
 
     # Remove hooks
     for handle in hook_handles:
@@ -202,13 +203,15 @@ def extract_features(image):
                    range(0, len(layer3_output_flattened), stride)]
 
     fc_1000 = outputs['Linear'].squeeze().numpy()
+    resnet = resnet_output.squeeze().numpy()
 
     return {
         "ColorMoments": color_moments,
         "HOG": hog_features,
         "AvgPool": avgpool_1024,
         "Layer3": layer3_1024,
-        "FCLayer": fc_1000
+        "FCLayer": fc_1000,
+        "RESNET": resnet
     }
 
 
