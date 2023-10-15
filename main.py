@@ -15,6 +15,25 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from tensorly.decomposition import parafac
 import sqlite3
+from skimage.io import imread
+from skimage.transform import resize
+from skimage.feature import hog
+from skimage import exposure
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy.stats import skew
+from skimage.color import rgb2gray
+import torch
+import os, sys
+from tqdm import tqdm
+import networkx as nx
+import datetime
+import types
+import torchvision
+import torchvision.transforms as transforms
+from torch.utils.data import DataLoader
+
 
 warnings.simplefilter(action='ignore', category=Warning)
 
@@ -1046,6 +1065,528 @@ def task_10(label_id, latent_semantics_file, k):
     plt.tight_layout()
     plt.show()
 
+# Longchao Taks11:
+
+def descriptor_HOG(image_id):
+    img = imread(image_id)
+    image_gray = rgb2gray(img)
+    resized_img = resize(image_gray, (300, 100))
+
+    #  channel_axis: If None, the image is assumed to be a grayscale (single channel) image.
+    #         Otherwise, this parameter indicates which axis of the array corresponds
+    #         to channels.
+    fd, hog_image = hog(resized_img, orientations=9, pixels_per_cell=(26, 9),
+                        cells_per_block=(2, 2), visualize=True, channel_axis=None, feature_vector=False)
+
+    fd_lower = np.transpose(fd, (0, 1, 4, 2, 3))
+    fd_lower = np.mean(fd_lower, axis=(3, 4))
+
+    # print(fd_lower.shape)
+    return fd_lower
+
+
+def descriptor_moments(image_id):
+    img = imread(image_id)
+    resized_img = resize(img, (300, 100))
+    ## partition the image into 10*10
+
+    # Define the number of cells in the grid
+    num_cells_x = 10
+    num_cells_y = 10
+
+    # Compute the dimensions of each cell
+    cell_height = resized_img.shape[0] // num_cells_y
+    cell_width = resized_img.shape[1] // num_cells_x
+
+    # Create a copy of the resized image for visualization
+    visualized_img = resized_img.copy()
+
+    # Draw grid lines on the image
+    for i in range(1, num_cells_x):
+        x = i * cell_width
+        visualized_img[:, x, :] = 0  # Set vertical lines to black
+
+    for j in range(1, num_cells_y):
+        y = j * cell_height
+        visualized_img[y, :, :] = 0  # Set horizontal lines to black
+
+    y, x, d = visualized_img.shape
+
+    x_len = 10
+    y_len = 10
+
+    y_block = y // y_len
+    x_block = x // x_len
+
+    sub_figs = []
+    for j in range(0, y-1, y_block):
+        for i in range(0, x-1, x_block):
+            x_start = i
+            x_end = i+x_block
+
+            y_start = j
+            y_end = j+y_block
+
+            sub_figs.append(resized_img[y_start:y_end,x_start:x_end,])
+
+
+    # print(sub_figs.__len__())
+
+    read_group = [[] for i in range (3)] #[[], [], []]: mean, std, stew
+    blue_group = [[] for i in range (3)]
+    green_group = [[] for i in range (3)]
+
+    # print(value_pack[0].shape)
+    for item in sub_figs: # (30, 10, 3)
+        r_group = item[:, :, 0].reshape(-1) # (30, 10)
+        g_group = item[:, :, 1].reshape(-1) # (30, 10)
+        b_group = item[:, :, 2].reshape(-1) # (30, 10)
+
+
+        for i in range(3):
+            if i == 0 :
+                read_group[i].append(np.mean(r_group))
+                blue_group[i].append(np.mean(g_group))
+                green_group[i].append(np.mean(b_group))
+            if i == 1 :
+                read_group[i].append(np.std(r_group))
+                blue_group[i].append(np.std(g_group))
+                green_group[i].append(np.std(b_group))
+            if i == 2 :
+                read_group[i].append(skew(r_group, axis=0, bias=True))
+                blue_group[i].append(skew(r_group, axis=0, bias=True))
+                green_group[i].append(skew(r_group, axis=0, bias=True))
+        # print(r_group.shape)
+
+    # print(np.array(read_group).shape)
+
+    descriptor = []
+    descriptor.append(np.reshape((r_group), (10, 10, -1)))
+    descriptor.append(np.reshape((g_group), (10, 10, -1)))
+    descriptor.append(np.reshape((b_group), (10, 10, -1)))
+
+    return descriptor
+
+def Euclidean_Distance(query, candidate):
+    var = query - candidate
+    distances = np.sqrt(np.sum(var ** 2))
+
+    # mean_again = np.mean(distances, axis=(0, 1))
+    return distances
+
+def Euclidean_Distance_for_moments(query, candidate):
+    var = query - candidate
+    distances = np.sqrt(np.sum(var ** 2, axis=(-1, -2)))
+
+    mean_again = np.mean(distances, axis=(0, 1))
+    return mean_again
+
+
+
+def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_graph = True):
+    mode = in_mode # HOGs, moments, avg_pool, FC, layer3, T3-CM-5-SVD
+    # ******************************* formal query input **************************************
+    value_n = n # n most similar images in the database in the given space
+    value_m = m # m most significant images
+    # *****************************************************************************************
+    # Self Judge first, then follow the rules:
+    if use_current_graph and (label_id in [0, 20, 55, 100]) and m == 5 and n == 10 and (in_mode in ["T3-CM-5-SVD", "FC"]):
+        try:
+            if mode == "T3-CM-5-SVD":
+                if label_id == 0:
+                    exist_graph_path = "./graph_files/T3-CM-5-SVD-Simi-Graph-0.gexf" 
+                elif label_id == 20:
+                    exist_graph_path = "./graph_files/T3-CM-5-SVD-Simi-Graph-20.gexf"
+                elif label_id == 55:
+                    exist_graph_path = "./graph_files/T3-CM-5-SVD-Simi-Graph-55.gexf"
+                elif label_id == 100:
+                    exist_graph_path = "./graph_files/T3-CM-5-SVD-Simi-Graph-100.gexf"
+            
+            if mode == "FC":
+                if label_id == 0:
+                    exist_graph_path = "./graph_files/FC-Simi-Graph-0.gexf" 
+                elif label_id == 20:
+                    exist_graph_path = "./graph_files/FC-Simi-Graph-20.gexf"
+                elif label_id == 55:
+                    exist_graph_path = "./graph_files/FC-Simi-Graph-55.gexf"
+                elif label_id == 100:
+                    exist_graph_path = "./graph_files/FC-Simi-Graph-100.gexf"
+        except Exception as e:
+            print("Existing graph files not found, constructing new one...")
+            use_current_graph = False
+    else:
+        use_current_graph = False
+
+    save_graph_name = "./graph_files/"+ mode + "-Simi"+ "-Graph-"+str(label_id)+".gexf"
+    # FC / T3-CM-5-SVD
+
+    if mode in ["HOGs", "moments"]:
+
+        image_id = str(label_id)
+        mapping = {"0":"8394", "880":"4402", "2500":"1134", "5122":"", "8676": "3912"}
+        base_path = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/origin/"
+        label = mapping[image_id] # query label
+        input_path = base_path+label+".png"
+        img = imread(input_path)
+
+    elif mode in[ "FC", 'T3-CM-5-SVD']:
+
+        image_id = label_id # 100, 55, 20, 0
+        
+        download_dir = "./data"
+        
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),  # Resize the images to 224x224 pixels (adjust as needed)
+            transforms.ToTensor(),          # Convert images to PyTorch tensors
+        ])
+
+        caltech101_dataset = torchvision.datasets.Caltech101(
+            root=download_dir,
+            download=True,        # Set to True to download the dataset
+            transform=transform   # Apply the defined transform to the images
+        )
+
+        data_loader = DataLoader(
+            dataset=caltech101_dataset,
+            batch_size=4,
+            shuffle=True,
+            num_workers = 8
+        )
+        selected_image, label = caltech101_dataset[image_id]
+
+        print(selected_image.shape)
+        img = np.transpose(selected_image, (1, 2, 0))
+
+    # Show the image that is being requested:
+
+    plt.axis("off")
+    plt.imshow(img)
+    print(img.shape)
+    plt.show()
+    
+    if use_current_graph:
+        G = nx.read_gexf(exist_graph_path)
+    else:
+        # Create a graph.
+        G = nx.Graph()
+        # target_description = descriptor_fun(input_path)
+        
+        if mode == "HOGs":
+            data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_HOGs.pt")
+            descriptor_fun = descriptor_HOG
+            
+        elif mode == "moments":
+            data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_moments.pt")[-500:]
+            descriptor_fun = descriptor_moments
+
+        elif mode == "avg_pool":
+            data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_avgpool_1024.pt")
+
+        elif mode == "layer3":
+            data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_layer3_1024.pt")
+
+        elif mode == "FC":
+            # ('0', tensor([[6.1887e+00,...937e-04]]))
+            data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_fclayer_1000.pt")[0:500]
+            image_data = data[image_id][1]
+            # descriptor_fun = descriptor_moments
+            
+        elif mode == "T3-CM-5-SVD":
+            
+            file_name = "./T3-CM-5-SVD.csv"
+            csv_data = pd.read_csv(file_name, sep=",", header=0)
+            length = csv_data.shape[0]
+            # transfer from origin structure to unified level:
+            data = []
+            for i in range(length):
+                data.append((str(i), csv_data.iloc[i].values))
+            data = data[:500]
+            image_data = data[image_id][1]
+        
+        
+        print("Starting constructing the graph, please wait...")
+        for node_id, descrip in tqdm(data):
+            # add note
+            G.add_node(node_id)
+            # renew list for every new node
+            evaluate_list = []
+            if mode in ["HOGs", "moments"] :
+            # current descriptor from node
+                node_now = descriptor_fun(base_path+str(node_id+".png"))
+
+            elif mode =="moments":
+                node_now = np.transpose(node_now, (1, 2, 3, 0))
+            
+            elif mode == "FC":
+                # the data set directly contains the FC output (1, 1000), so we take [0] ==> (1000,)
+                node_now = descrip.detach().numpy()[0]
+
+            elif mode == "T3-CM-5-SVD":
+                node_now = descrip[0]
+
+            for id_now, description in data:
+                if mode == "HOGs":
+                    evaluate_list.append((id_now, Euclidean_Distance(node_now, description)))
+                elif mode == "moments":
+                    description_new = np.transpose(description, (1, 2, 3, 0))
+                    evaluate_list.append((id_now, Euclidean_Distance_for_moments(node_now, description_new)))
+                elif mode == "FC":
+                    # evaluate_list.append((id, Euclidean_Distance(image_data.detach().numpy(), description_new.detach().numpy())))
+                    evaluate_list.append((id_now, np.corrcoef(image_data.detach().numpy()[0], description.detach().numpy()[0])[0, 1]))
+                elif mode == "T3-CM-5-SVD":
+                    evaluate_list.append((id_now, np.corrcoef(image_data, description)[0, 1]))
+
+            if mode == "HOGs": # distance = Euclidean distance
+                sorted_data = sorted(evaluate_list, key=lambda x:x[1])
+            elif mode in ["FC", "T3-CM-5-SVD"]:
+                sorted_data = sorted(evaluate_list, key=lambda x:x[1], reverse=True)
+            
+            selected_result = sorted_data[:value_n]
+            # print(selected_result)
+            # the id is the data[0]
+            for i in range(1, len(selected_result)): # ignore the first
+                # add edge:
+                G.add_edge(node_id, selected_result[i][0], weight=selected_result[i][1])
+            
+        nx.write_gexf(G, save_graph_name)
+    
+    # alpha (damping factor) is set to 0.85, 
+    # means that there is a 15% chance that the random walker will teleport to any node in the graph with equal probability
+    # and an 85% chance that the walker will follow outgoing links to other nodes in the graph.
+
+    # pagerank_scores = nx.pagerank(G, personalization=personalized_teleport_vector)
+    pagerank_scores = nx.pagerank(G)
+
+    sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True) # rank pageranke score by larege-smaller
+
+    key_list = []
+
+    for i in range(1, value_m+1):
+        id, pagescore = sorted_images[i+1]
+        if not isinstance(id, types.BuiltinFunctionType):
+            key_list.append(str(id))
+            print(sorted_images[i]) # 0(itself), so we start with 12345
+
+    print("finished!")
+
+
+    plt.figure(figsize=(10, 3))
+
+    counter = 1
+
+    if not value_m % 2 == 0:
+        for j in range(value_m):
+            plt.subplot(1, value_m, counter) # 1 row
+            if mode in ["HOGs" or "moments"] :
+                    plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
+            elif mode in ["FC", "T3-CM-5-SVD"]:
+                selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
+                plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+            counter += 1 
+            
+            plt.axis('off')
+            plt.tight_layout()
+    else:
+        for i in range(2):
+            for j in range(int(value_m/2)):
+                plt.subplot(2, int(value_m/2), counter)
+                print(counter)
+                if mode in ["HOGs" or "moments"] :
+                    plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
+                elif mode in ["FC", "T3-CM-5-SVD"]:
+                    selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
+                    plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+
+                counter += 1 
+                plt.axis('off')
+        plt.tight_layout()
+
+    current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    if not os.path.exists("./data/output/"):
+        os.makedirs("./data/output/")
+    plt.savefig("./data/output/mode"+str(mode)+"_"+"l"+str(image_id)+"_"+"n"+str(value_n-1)+"_"+"m"+str(value_m)+current_time+".png")
+    # Show the entire figure with subplots
+    plt.show()
+
+def resnetfc(img):
+    #dictionary storing layer outputs
+    layer_outputs = {
+        'layer3': [],
+        'avgpool': [],
+        'fc': []
+    }
+    def get_intermediate_outputs(layer):
+        def hook(model, input, output):
+            layer_outputs[layer] = output.detach()
+        return hook
+    #resize image
+    imOpen = np.asarray(img)
+    resizedImg = resize(imOpen, (224,224))
+    npDataset = torch.tensor([np.transpose(resizedImg)])
+    #print("Shape:" + str(npDataset.shape))
+    rn_model =  torchvision.models.resnet50(weights=torchvision.models.ResNet50_Weights.DEFAULT)
+    rn_model.eval()
+    rn_model.fc.register_forward_hook(get_intermediate_outputs('fc'))
+    rn_model(npDataset.float())
+
+    return layer_outputs['fc']
+
+
+def task_11_extra(label_src = "", m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_graph = False):
+    # label_src = "./data/extraImg/Dwayne_Johnson.jpeg"
+    mode = in_mode # HOGs, moments, avg_pool, FC, layer3, T3-CM-5-SVD
+    # ******************************* formal query input **************************************
+    value_n = n # n most similar images in the database in the given space
+    value_m = m # m most significant images
+    # *****************************************************************************************
+    save_graph_name = mode + "-Simi"+ "-Graph-"+str(label_src.split("/")[-1].replace(".", ""))+".gexf"
+    # read in the current file
+    img = imread(label_src)
+    # Show the image that is being requested:
+
+    plt.axis("off")
+    plt.imshow(img)
+    print(img.shape)
+    plt.show()
+    # Create a graph.
+    G = nx.Graph()
+    
+    if mode == "HOGs":
+        pass
+    elif mode == "moments":
+        pass
+    elif mode == "avg_pool":
+        pass
+    elif mode == "T3-CM-5-SVD":
+        pass
+    elif mode == "layer3":
+        pass
+    elif mode == "FC":
+        # ('0', tensor([[6.1887e+00,...937e-04]]))
+        data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_fclayer_1000.pt")[0:500]
+        image_data = resnetfc(img)
+        data.insert(0, ("new", image_data))
+        # descriptor_fun = descriptor_moments
+
+    print("Starting constructing the graph, please wait...")
+    for node_id, descrip in tqdm(data):
+        # add note
+        G.add_node(node_id)
+        # renew list for every new node
+        evaluate_list = []
+        if mode in ["HOGs", "moments"] :
+            pass
+        # current descriptor from node
+            # node_now = descriptor_fun("base_path"+str(node_id+".png"))
+
+        elif mode =="moments":
+            node_now = np.transpose(node_now, (1, 2, 3, 0))
+        
+        elif mode == "FC":
+            # the data set directly contains the FC output (1, 1000), so we take [0] ==> (1000,)
+            node_now = descrip.detach().numpy()[0]
+
+        elif mode == "T3-CM-5-SVD":
+            node_now = descrip[0]
+
+        for id_now, description in data:
+            if mode == "HOGs":
+                evaluate_list.append((id_now, Euclidean_Distance(node_now, description)))
+            elif mode == "moments":
+                description_new = np.transpose(description, (1, 2, 3, 0))
+                evaluate_list.append((id_now, Euclidean_Distance_for_moments(node_now, description_new)))
+            elif mode == "FC":
+                # evaluate_list.append((id, Euclidean_Distance(image_data.detach().numpy(), description_new.detach().numpy())))
+                evaluate_list.append((id_now, np.corrcoef(image_data.detach().numpy()[0], description.detach().numpy()[0])[0, 1]))
+            elif mode == "T3-CM-5-SVD":
+                evaluate_list.append((id_now, np.corrcoef(image_data, description)[0, 1]))
+
+        if mode == "HOGs": # distance = Euclidean distance
+            sorted_data = sorted(evaluate_list, key=lambda x:x[1])
+        elif mode in ["FC", "T3-CM-5-SVD"]:
+            sorted_data = sorted(evaluate_list, key=lambda x:x[1], reverse=True)
+        
+        selected_result = sorted_data[:value_n]
+        # print(selected_result)
+        # the id is the data[0]
+        for i in range(1, len(selected_result)): # ignore the first
+            # add edge:
+            G.add_edge(node_id, selected_result[i][0], weight=selected_result[i][1])
+        
+    nx.write_gexf(G, save_graph_name)
+    
+    # alpha (damping factor) is set to 0.85, 
+    # means that there is a 15% chance that the random walker will teleport to any node in the graph with equal probability
+    # and an 85% chance that the walker will follow outgoing links to other nodes in the graph.
+
+    # pagerank_scores = nx.pagerank(G, personalization=personalized_teleport_vector)
+    pagerank_scores = nx.pagerank(G)
+
+    sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True) # rank pageranke score by larege-smaller
+
+    key_list = []
+
+    for i in range(1, value_m+1):
+        id, pagescore = sorted_images[i+1]
+        if not isinstance(id, types.BuiltinFunctionType):
+            key_list.append(str(id))
+            print(sorted_images[i]) # 0(itself), so we start with 12345
+
+    print("finished!")
+
+    plt.figure(figsize=(10, 3))
+
+    download_dir = "./data"
+        
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # Resize the images to 224x224 pixels (adjust as needed)
+        transforms.ToTensor(),          # Convert images to PyTorch tensors
+    ])
+
+    caltech101_dataset = torchvision.datasets.Caltech101(
+        root=download_dir,
+        download=True,        # Set to True to download the dataset
+        transform=transform   # Apply the defined transform to the images
+    )
+
+    counter = 1
+
+    if not value_m % 2 == 0:
+        for j in range(value_m):
+            plt.subplot(1, value_m, counter) # 1 row
+            if mode in ["HOGs" or "moments"] :
+                print("Please choose other mods...")
+                    # plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
+            elif mode in ["FC", "T3-CM-5-SVD"]:
+                selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
+                plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+            counter += 1 
+            
+            plt.axis('off')
+            plt.tight_layout()
+    else:
+        for i in range(2):
+            for j in range(int(value_m/2)):
+                plt.subplot(2, int(value_m/2), counter)
+                print(counter)
+                if mode in ["HOGs" or "moments"] :
+                    print("Please choose other mods...")
+                    # plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
+                elif mode in ["FC", "T3-CM-5-SVD"]:
+                    selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
+                    plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+
+                counter += 1 
+                plt.axis('off')
+        plt.tight_layout()
+
+    current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    if not os.path.exists("./data/output/"):
+        os.makedirs("./data/output/")
+    plt.savefig("./data/output/mode"+str(mode)+"_"+"l"+str(label_src.split("/")[-1].replace(".", ""))+"_"+"n"+str(value_n-1)+"_"+"m"+str(value_m)+current_time+".png")
+    # Show the entire figure with subplots
+    plt.show()
+
 
 def retrieve_image(imageID_or_file):
     if isinstance(imageID_or_file, int):
@@ -1081,235 +1622,264 @@ def compare_features(query_features, database_features):
     similarity = dot_product / (norm_a * norm_b)
     return similarity
 
+while True:
+    choice = str(input("Please enter the task you want to execute (0a/0b/1/2a/2b/3/4/5/6/7/8/9/10/11): "))
+    feature_space = None
+    if choice == "0a":
+        task_0a()
+    elif choice == "0b":
+        imageID = input("Enter the ImageId or provide Image Path: ")
+        if imageID.isnumeric():
+            imageID = int(imageID)
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        else:
+            print("Wrong feature space selected!")
+        k = int(input("Enter the number of relevant images you want: "))
+        task_0b(imageID, feature_space, k)
 
-choice = str(input("Please enter the task you want to execute (0a/0b/1/2a/2b/3/4/5/6/7/8/9/10/11): "))
-feature_space = None
-if choice == "0a":
-    task_0a()
-elif choice == "0b":
-    imageID = input("Enter the ImageId or provide Image Path: ")
-    if imageID.isnumeric():
-        imageID = int(imageID)
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    else:
-        print("Wrong feature space selected!")
-    k = int(input("Enter the number of relevant images you want: "))
-    task_0b(imageID, feature_space, k)
+    elif choice == "1":
+        label_name = input("Enter the label id: ")
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        else:
+            print("Wrong feature space selected!")
+        k = int(input("Enter the number of relevant images you want: "))
+        task_1(label_name, feature_space, k)
 
-elif choice == "1":
-    label_name = input("Enter the label id: ")
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    else:
-        print("Wrong feature space selected!")
-    k = int(input("Enter the number of relevant images you want: "))
-    task_1(label_name, feature_space, k)
+    elif choice == "2a":
+        imageID = input("Enter the ImageId or provide Image Path: ")
+        if imageID.isnumeric():
+            imageID = int(imageID)
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        else:
+            print("Wrong feature space selected!")
+        k = int(input("Enter the number of top labels you want: "))
+        task_2a(imageID, feature_space, k)
 
-elif choice == "2a":
-    imageID = input("Enter the ImageId or provide Image Path: ")
-    if imageID.isnumeric():
-        imageID = int(imageID)
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    else:
-        print("Wrong feature space selected!")
-    k = int(input("Enter the number of top labels you want: "))
-    task_2a(imageID, feature_space, k)
+    elif choice == "2b":
+        imageID = input("Enter the ImageId or provide Image Path: ")
+        if imageID.isnumeric():
+            imageID = int(imageID)
+        k = int(input("Enter the number of top labels you want: "))
+        task_2b(imageID, k)
 
-elif choice == "2b":
-    imageID = input("Enter the ImageId or provide Image Path: ")
-    if imageID.isnumeric():
-        imageID = int(imageID)
-    k = int(input("Enter the number of top labels you want: "))
-    task_2b(imageID, k)
+    elif choice == "3":
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        elif feature_in == 6:
+            feature_space = "RESNET"
+        else:
+            print("Wrong feature space selected!")
+            exit()
 
-elif choice == "3":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    elif feature_in == 6:
-        feature_space = "RESNET"
-    else:
-        print("Wrong feature space selected!")
-        exit()
+        k = int(input("Enter the number of latent semantics you want: "))
+        reduction_in = int(input(
+            "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
+        if reduction_in == 1:
+            reduction_technique = "SVD"
+        elif reduction_in == 2:
+            reduction_technique = "NNMF"
+        elif reduction_in == 3:
+            reduction_technique = "LDA"
+        elif reduction_in == 4:
+            reduction_technique = "k-means"
+        else:
+            print("Invalid choice for reduction technique!")
+            exit()
 
-    k = int(input("Enter the number of latent semantics you want: "))
-    reduction_in = int(input(
-        "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
-    if reduction_in == 1:
-        reduction_technique = "SVD"
-    elif reduction_in == 2:
-        reduction_technique = "NNMF"
-    elif reduction_in == 3:
-        reduction_technique = "LDA"
-    elif reduction_in == 4:
-        reduction_technique = "k-means"
-    else:
-        print("Invalid choice for reduction technique!")
-        exit()
-
-    task_3(feature_space, k, reduction_technique)
+        task_3(feature_space, k, reduction_technique)
 
 
-elif choice == "4":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    elif feature_in == 6:
-        feature_space = "RESNET"
-    else:
-        print("Wrong feature space selected!")
-        exit()
+    elif choice == "4":
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        elif feature_in == 6:
+            feature_space = "RESNET"
+        else:
+            print("Wrong feature space selected!")
+            exit()
 
-    k = int(input("Enter the number of latent semantics you want: "))
-    task_4(feature_space, k)
+        k = int(input("Enter the number of latent semantics you want: "))
+        task_4(feature_space, k)
 
-elif choice == "5":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    elif feature_in == 6:
-        feature_space = "RESNET"
-    else:
-        print("Wrong feature space selected!")
-        exit()
+    elif choice == "5":
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        elif feature_in == 6:
+            feature_space = "RESNET"
+        else:
+            print("Wrong feature space selected!")
+            exit()
 
-    k = int(input("Enter the number of latent semantics you want: "))
-    reduction_in = int(input(
-        "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
-    if reduction_in == 1:
-        reduction_technique = "SVD"
-    elif reduction_in == 2:
-        reduction_technique = "NNMF"
-    elif reduction_in == 3:
-        reduction_technique = "LDA"
-    elif reduction_in == 4:
-        reduction_technique = "k-means"
-    elif feature_in == 6:
-        feature_space = "RESNET"
-    else:
-        print("Invalid choice for reduction technique!")
-        exit()
+        k = int(input("Enter the number of latent semantics you want: "))
+        reduction_in = int(input(
+            "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
+        if reduction_in == 1:
+            reduction_technique = "SVD"
+        elif reduction_in == 2:
+            reduction_technique = "NNMF"
+        elif reduction_in == 3:
+            reduction_technique = "LDA"
+        elif reduction_in == 4:
+            reduction_technique = "k-means"
+        elif feature_in == 6:
+            feature_space = "RESNET"
+        else:
+            print("Invalid choice for reduction technique!")
+            exit()
 
-    task_5(feature_space, k, reduction_technique)
+        task_5(feature_space, k, reduction_technique)
 
-elif choice == "6":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
-    if feature_in == 1:
-        feature_space = "ColorMoments"
-    elif feature_in == 2:
-        feature_space = "HOG"
-    elif feature_in == 3:
-        feature_space = "AvgPool"
-    elif feature_in == 4:
-        feature_space = "Layer3"
-    elif feature_in == 5:
-        feature_space = "FCLayer"
-    elif feature_in == 6:
-        feature_space = "RESNET"
-    else:
-        print("Wrong feature space selected!")
-        exit()
+    elif choice == "6":
+        feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
+        if feature_in == 1:
+            feature_space = "ColorMoments"
+        elif feature_in == 2:
+            feature_space = "HOG"
+        elif feature_in == 3:
+            feature_space = "AvgPool"
+        elif feature_in == 4:
+            feature_space = "Layer3"
+        elif feature_in == 5:
+            feature_space = "FCLayer"
+        elif feature_in == 6:
+            feature_space = "RESNET"
+        else:
+            print("Wrong feature space selected!")
+            exit()
 
-    k = int(input("Enter the number of latent semantics you want: "))
-    reduction_in = int(input(
-        "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
-    if reduction_in == 1:
-        reduction_technique = "SVD"
-    elif reduction_in == 2:
-        reduction_technique = "NNMF"
-    elif reduction_in == 3:
-        reduction_technique = "LDA"
-    elif reduction_in == 4:
-        reduction_technique = "k-means"
-    else:
-        print("Invalid choice for reduction technique!")
-        exit()
+        k = int(input("Enter the number of latent semantics you want: "))
+        reduction_in = int(input(
+            "Choose a dimensionality reduction technique:\n1) SVD\n2) NNMF\n3) LDA\n4) k-means\n\nEnter your choice: "))
+        if reduction_in == 1:
+            reduction_technique = "SVD"
+        elif reduction_in == 2:
+            reduction_technique = "NNMF"
+        elif reduction_in == 3:
+            reduction_technique = "LDA"
+        elif reduction_in == 4:
+            reduction_technique = "k-means"
+        else:
+            print("Invalid choice for reduction technique!")
+            exit()
 
-    task_6(feature_space, k, reduction_technique)
+        task_6(feature_space, k, reduction_technique)
 
-elif choice == "7":
-    imageID = input("Enter the ImageId or provide Image Path: ")
-    if imageID.isnumeric():
-        imageID = int(imageID)
-    latent_semantic = input("Enter the latent semantic file you want to use: ")
-    # query_image = retrieve_image(imageID)
-    k = int(input("Enter the number of similar images you want: "))
-    task_7(imageID, latent_semantic, k)
+    elif choice == "7":
+        imageID = input("Enter the ImageId or provide Image Path: ")
+        if imageID.isnumeric():
+            imageID = int(imageID)
+        latent_semantic = input("Enter the latent semantic file you want to use: ")
+        # query_image = retrieve_image(imageID)
+        k = int(input("Enter the number of similar images you want: "))
+        task_7(imageID, latent_semantic, k)
 
-elif choice == "8":
-    imageID = input("Enter the ImageId or provide Image Path: ")
-    if imageID.isnumeric():
-        imageID = int(imageID)
-    latent_semantic = input("Enter the latent semantic file you want to use: ")
-    k = int(input("Enter the number of similar labels you want: "))
+    elif choice == "8":
+        imageID = input("Enter the ImageId or provide Image Path: ")
+        if imageID.isnumeric():
+            imageID = int(imageID)
+        latent_semantic = input("Enter the latent semantic file you want to use: ")
+        k = int(input("Enter the number of similar labels you want: "))
 
-    task_8(imageID, latent_semantic, k)
+        task_8(imageID, latent_semantic, k)
 
-elif choice == "9":
-    label = input("Enter the label id: ")
-    label_latent_semantic = input("Enter the Label's latent semantic file you want to use: ")
-    k = int(input("Enter the number of similar labels you want: "))
+    elif choice == "9":
+        label = input("Enter the label id: ")
+        label_latent_semantic = input("Enter the Label's latent semantic file you want to use: ")
+        k = int(input("Enter the number of similar labels you want: "))
 
-    task_9(label, label_latent_semantic, k)
+        task_9(label, label_latent_semantic, k)
 
-elif choice == "10":
-    label = input("Enter the label id: ")
-    label_latent_semantic = input("Enter the Label's latent semantic you want to use: ")
-    k = int(input("Enter the number of relevant images you want: "))
+    elif choice == "10":
+        label = input("Enter the label id: ")
+        label_latent_semantic = input("Enter the Label's latent semantic you want to use: ")
+        k = int(input("Enter the number of relevant images you want: "))
 
-    task_10(label, label_latent_semantic, k)
+        task_10(label, label_latent_semantic, k)
 
-conn.close()
+    elif choice == "11":
+        style = int(input("You want to use image from Database (1) or External (2): "))
+        while style not in [1, 2]:
+            style = int(input("You want to use image from Database (1) or External (2): "))
+        
+        if style == 1:
+            label= input("Enter the label id (0, 20, 55, 100): ")
+            get_m = input("Enter m significant images you want to get (5): ") # m = 5
+            get_n = input("Enter n similar images you want in PageRank (10): ") # n = 10
+            get_mode = input("Select mode: T3-CM-5-SVD / FC:")
+            current_graph = input("Use pre-constructed graph? True/False:")
+
+            if current_graph == "True":
+                choice = True
+            else:
+                choice = False
+
+            task_11(label_id = int(label), m = int(get_m), n = int(get_n), in_mode = get_mode, use_current_graph = choice)
+        
+        elif style == 2:
+            src = input("Enter the image absolute path: ")
+            get_m = input("Enter m significant images you want to get (5): ") # m = 5
+            get_n = input("Enter n similar images you want in PageRank (10): ") # n = 10
+            get_mode = input("Select mode: T3-CM-5-SVD / FC:")
+            choice = False # constructe new one
+            
+            task_11_extra(label_src=src, m = int(get_m), n = int(get_n), in_mode = get_mode, use_current_graph = choice)
+            # task_11_extra(label_src="/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase2/CSE515-Project/data/extraImg/Dwayne_Johnson.jpeg", m = 5, n = 10, in_mode = "FC", use_current_graph = choice)
+
+    conn.close()

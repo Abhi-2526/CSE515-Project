@@ -5,3 +5,5 @@
 #Ignore all zip 
 *.zip
 *.mat
+*.db
+image_features.db
