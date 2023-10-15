@@ -518,6 +518,36 @@ def normalize_factors(factors):
     return normalized_factors
 
 
+def extract_latent_semantics(tensor, k):
+    """
+    Decompose the tensor using CP decomposition to get weights and factors.
+    """
+    weights, factors = parafac(tensor, rank=k, n_iter_max=100, normalize_factors=True)
+    return weights, factors[2]  # Third mode is 'label'
+
+
+def structure_output(weights, label_factors, label_dict):
+    """
+    Create a structured output: a list of dictionaries, where each dictionary
+    contains a latent semantic number and its corresponding labels with weights.
+    """
+    structured_output = []
+
+    for i in range(label_factors.shape[1]):
+        label_weights = weights[i] * label_factors[:, i]  # Multiply the weights with the label factors
+        sorted_indices = np.argsort(label_weights)[::-1]
+        sorted_labels = [label_dict[idx] for idx in sorted_indices]
+        sorted_weights = label_weights[sorted_indices]
+        label_dict_output = {label: weight for label, weight in zip(sorted_labels, sorted_weights)}
+
+        structured_output.append({
+            "LatentSemantic": i + 1,
+            "Labels": label_dict_output
+        })
+
+    return structured_output
+
+
 def task_4(feature_space, k):
     load_features_from_database()
     # Create a tensor of shape (number of images, number of features, number of labels)
@@ -531,40 +561,22 @@ def task_4(feature_space, k):
         label_idx = int(entry["label"])
         tensor[idx, :, label_idx] = entry["features"][feature_space]
 
+    label_dict = {idx: name for name, idx in label_name_to_idx.items()}
+
     # Perform CP decomposition
-    weights, factors = parafac(tensor, rank=k)
+    weights, label_factors = extract_latent_semantics(tensor, k)
+    structured_results = structure_output(weights, label_factors, label_dict)
 
-    label_weights = factors[2]
-
-    # Sort the weights and associate with labels
-    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
-    df = pd.DataFrame(label_weights)
-    df.index = df.index.map(idx_to_label_name)
-
-    # Save to csv
-    k = df.shape[1]
-    filename = f"latent_semantics_{k}_components.csv"
-    df.to_csv(filename)
-    print(f"Data saved to {filename}")
-
-    # Compute label-weight pairs
-    label_weights = df.sum(axis=1)
-    sorted_labels = label_weights.sort_values(ascending=False).index.tolist()
-    sorted_weights = label_weights.sort_values(ascending=False).values.tolist()
-    label_weight_pairs = [{'label': label, 'weight': weight} for label, weight in zip(sorted_labels, sorted_weights)]
-
-    # Display the label-weight pairs
-    for pair in label_weight_pairs:
-        print(f"Label: {pair['label']}, Weight: {pair['weight']}")
+    print(structured_results)
 
     # Store the latent semantics in an output file
     output_filename = f"T4-{feature_space}-{k}.json"
-
     # Save to JSON
     with open(output_filename, 'w') as f:
-        json.dump(label_weight_pairs, f, indent=4)
+        json.dump(structured_results, f, indent=4)
 
     print(f"Latent semantics stored in {output_filename}")
+
 
 def task_5(feature_space, k, reduction_technique):
     load_features_from_database()
