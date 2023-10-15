@@ -4,6 +4,7 @@ from skimage.feature import hog
 from skimage import exposure
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from scipy.stats import skew
 from skimage.color import rgb2gray
 import torch
@@ -17,32 +18,18 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
 
-mode = "fc_layer" # HOGs, moments, avg_pool, fc_layer, layer3, T3-CM-5-SVD
+mode = "T3-CM-5-SVD" # HOGs, moments, avg_pool, fc_layer, layer3, T3-CM-5-SVD
 # ******************************* formal query input **************************************
 feature_model = mode
 value_n = 10 # n most similar images in the database in the given space
 value_m = 5 # m most significant images
 # *****************************************************************************************
 use_current_graph = False
-# exist_graph_path = "FC-Simi-Graph-20.gexf"
-save_graph_name = "FC-Simi-Graph-100.gexf"
+exist_graph_path = "FC-Simi-Graph-20.gexf" # "T3-CM-5-SVD-Simi-Graph-0.gexf", "FC-Simi-Graph-20.gexf"
+save_graph_name = "T3-CM-5-SVD-Simi-Graph-100.gexf"
 
 
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/image_0001.jpg"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/880.jpg"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/plane.png"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/cafeeecat.png"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/taiji.png"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/8676.jpg"
-
-# image_id = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/testset/query/5122.jpg"
-
-# two sets of data loading styles:
+# visualize the query label to verify: (two sets of data loading styles)
 
 if mode == ("HOGs" or "moments"):
 
@@ -54,17 +41,13 @@ if mode == ("HOGs" or "moments"):
     input_path = base_path+label+".png"
     img = imread(input_path)
 
-elif mode == ("fc_layer"):
+elif mode in[ "fc_layer", 'T3-CM-5-SVD']:
 
     # image_id = 0
     # image_id = 20
     # image_id = 55
     image_id = 100
-    # image_id = 880
-    # image_id = 2500
-    # image_id = 5122
-    # image_id = 8676
-
+    
     download_dir = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/tv_download/"
     
     transform = transforms.Compose([
@@ -233,6 +216,17 @@ elif mode == "fc_layer":
 elif mode == "layer3":
     data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_layer3_1024.pt")
     
+elif mode == "T3-CM-5-SVD":
+    
+    file_name = "/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase2/code/data/latent-SVD/T3-CM-5-SVD.csv"
+    csv_data = pd.read_csv(file_name, sep=",", header=0)
+    length = csv_data.shape[0]
+    # transfer from origin structure to unified level:
+    data = []
+    for i in range(length):
+        data.append((str(i), csv_data.iloc[i].values))
+    data = data[:500]
+    image_data = data[image_id][1]
 
 
 if use_current_graph:
@@ -250,7 +244,7 @@ else:
         G.add_node(node_id)
         # renew list for every new node
         evaluate_list = []
-        if mode == ("HOGs" or "moments") :
+        if mode in ["HOGs", "moments"] :
         # current descriptor from node
             node_now = descriptor_fun(base_path+str(node_id+".png"))
 
@@ -261,7 +255,8 @@ else:
             # the data set directly contains the fc_layer output (1, 1000), so we take [0] ==> (1000,)
             node_now = descrip.detach().numpy()[0]
 
-        # if mode == "avg_pool":
+        elif mode == "T3-CM-5-SVD":
+            node_now = descrip[0]
             
 
         for id_now, description in data:
@@ -273,10 +268,12 @@ else:
             elif mode == "fc_layer":
                 # evaluate_list.append((id, Euclidean_Distance(image_data.detach().numpy(), description_new.detach().numpy())))
                 evaluate_list.append((id_now, np.corrcoef(image_data.detach().numpy()[0], description.detach().numpy()[0])[0, 1]))
+            elif mode == "T3-CM-5-SVD":
+                evaluate_list.append((id_now, np.corrcoef(image_data, description)[0, 1]))
 
         if mode == "HOGs": # distance = Euclidean distance
             sorted_data = sorted(evaluate_list, key=lambda x:x[1])
-        elif mode == "fc_layer":
+        elif mode in ["fc_layer", "T3-CM-5-SVD"]:
             sorted_data = sorted(evaluate_list, key=lambda x:x[1], reverse=True)
         
         selected_result = sorted_data[:value_n]
@@ -295,7 +292,7 @@ else:
 # pagerank_scores = nx.pagerank(G, personalization=personalized_teleport_vector)
 pagerank_scores = nx.pagerank(G)
 
-sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True)
+sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True) # rank pageranke score by larege-smaller
 
 key_list = []
 
@@ -316,9 +313,9 @@ counter = 1
 if not value_m % 2 == 0:
     for j in range(value_m):
         plt.subplot(1, value_m, counter) # 1 row
-        if mode == ("HOGs" or "moments") :
+        if mode in ["HOGs" or "moments"] :
                 plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
-        elif mode == "fc_layer":
+        elif mode in ["fc_layer", "T3-CM-5-SVD"]:
             selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
             plt.imshow(np.transpose(selected_image, (1, 2, 0)))
         counter += 1 
@@ -330,9 +327,9 @@ else:
         for j in range(int(value_m/2)):
             plt.subplot(2, int(value_m/2), counter)
             print(counter)
-            if mode == ("HOGs" or "moments") :
+            if mode in ["HOGs" or "moments"] :
                 plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
-            elif mode == "fc_layer":
+            elif mode in ["fc_layer", "T3-CM-5-SVD"]:
                 selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                 plt.imshow(np.transpose(selected_image, (1, 2, 0)))
 
