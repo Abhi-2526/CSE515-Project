@@ -9,6 +9,7 @@ from skimage.feature import hog
 from skimage.color import rgb2gray
 import numpy as np
 from PIL import Image
+import pandas
 from sklearn.decomposition import TruncatedSVD, NMF, LatentDirichletAllocation
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
@@ -456,18 +457,21 @@ def task_3(feature_space, k, reduction_technique):
     # Extract features for all images in the database
     all_features = [entry["features"][feature_space] for entry in database]
     all_features_matrix = np.array(all_features)
-    min_val = np.min(all_features_matrix)
-    if min_val < 0:
-        all_features_matrix -= min_val
 
     # Apply the selected dimensionality reduction technique
     if reduction_technique == "SVD":
         svd = TruncatedSVD(n_components=k)
         latent_semantics = svd.fit_transform(all_features_matrix)
     elif reduction_technique == "NNMF":
+        min_val = np.min(all_features_matrix)
+        if min_val < 0:
+            all_features_matrix -= min_val
         nmf = NMF(n_components=k)
         latent_semantics = nmf.fit_transform(all_features_matrix)
     elif reduction_technique == "LDA":
+        min_val = np.min(all_features_matrix)
+        if min_val < 0:
+            all_features_matrix -= min_val
         lda = LatentDirichletAllocation(n_components=k)
         latent_semantics = lda.fit_transform(all_features_matrix)
     elif reduction_technique == "k-means":
@@ -538,9 +542,31 @@ def normalize_factors(factors):
     return normalized_factors
 
 
+def extract_latent_semantics(tensor, k):
+    weights, factors = parafac(tensor, rank=k, n_iter_max=100, normalize_factors=True)
+    return weights, factors[2]  # Third mode is 'label'
+
+
+def structure_output(weights, label_factors, label_dict):
+    structured_output = []
+
+    for i in range(label_factors.shape[1]):
+        label_weights = weights[i] * label_factors[:, i]  # Multiply the weights with the label factors
+        sorted_indices = np.argsort(label_weights)[::-1]
+        sorted_labels = [label_dict[idx] for idx in sorted_indices]
+        sorted_weights = label_weights[sorted_indices]
+        label_dict_output = {label: weight for label, weight in zip(sorted_labels, sorted_weights)}
+
+        structured_output.append({
+            "LatentSemantic": i + 1,
+            "Labels": label_dict_output
+        })
+
+    return structured_output
+
+
 def task_4(feature_space, k):
     load_features_from_database()
-
     # Create a tensor of shape (number of images, number of features, number of labels)
     num_images = len(database)
     num_features = len(database[0]["features"][feature_space])
@@ -549,58 +575,24 @@ def task_4(feature_space, k):
     tensor = np.zeros((num_images, num_features, num_labels))
 
     for idx, entry in enumerate(database):
-        imageID = entry["imageID"]
         label_idx = int(entry["label"])
         tensor[idx, :, label_idx] = entry["features"][feature_space]
 
+    label_dict = {idx: name for name, idx in label_name_to_idx.items()}
+
     # Perform CP decomposition
-    weights, factors = parafac(tensor, rank=k, n_iter_max=100, normalize_factors=True, init='random', svd='numpy')
+    weights, label_factors = extract_latent_semantics(tensor, k)
+    structured_results = structure_output(weights, label_factors, label_dict)
 
-    sorted_indices = np.argsort(weights)[::-1]
-
-    # Extract the label weights
-    weights = weights[sorted_indices]
+    print(structured_results)
 
     # Store the latent semantics in an output file
     output_filename = f"T4-{feature_space}-{k}.json"
-    latent_semantics_list = np.real(factors[1][:, sorted_indices[:k]]) * weights
-    latent_semantics_list = latent_semantics_list.tolist()
-
-    print(latent_semantics_list)
-
-    latent_semantics_dict = {}
-
-    for idx, entry in enumerate(database):
-        imageID = entry["imageID"]
-
-        # Convert the NumPy array for this imageID to a Python list
-        latent_semantics_for_image = latent_semantics_list[idx].tolist()
-
-        latent_semantics_dict[imageID] = latent_semantics_for_image
-
-    print(latent_semantics_dict)
-
     # Save to JSON
     with open(output_filename, 'w') as f:
-        json.dump(latent_semantics_dict, f, indent=4)
+        json.dump(structured_results, f, indent=4)
 
     print(f"Latent semantics stored in {output_filename}")
-    # for i in range(k):
-    #     sorted_indices = np.argsort(weights)[::-1]
-    #
-    #     semantic_entry = {"LatentSemantic": i + 1, "Labels": {}}
-    #     for idx in sorted_indices:
-    #         label_name = list(label_name_to_idx.keys())[list(label_name_to_idx.values()).index(idx)]
-    #         semantic_entry["Labels"][label_name] = f"{weights[idx]:.4f}"
-    #
-    #     latent_semantics_list.append(semantic_entry)
-
-    # print(latent_semantics_list)
-    # # Save to JSON
-    # with open(output_filename, 'w') as f:
-    #     json.dump(latent_semantics_list, f, indent=4)
-    #
-    # print(f"Latent semantics stored in {output_filename}")
 
 
 def task_5(feature_space, k, reduction_technique):
@@ -662,9 +654,11 @@ def task_5(feature_space, k, reduction_technique):
         else:
             weights = latent_semantics[:, i]
         sorted_indices = np.argsort(weights)[::-1]
+        print(f"\nLatent Semantic {i+1}:")
         for idx in sorted_indices:
             label_name = list(label_name_to_idx.keys())[list(label_name_to_idx.values()).index(idx)]
             data_entry["Labels"][label_name] = float(weights[idx])
+            print(f"{label_name} : {weights[idx]}")
         latent_semantics_data.append(data_entry)
 
     def default_serialize(o):
@@ -727,19 +721,30 @@ def task_6(feature_space, k, reduction_technique):
     output_filename = f"T6-{feature_space}-{k}-{reduction_technique}.json"
     latent_semantics_data = []
 
-    for i, entry in enumerate(database):
-        imageID = entry["imageID"]
-        data_entry = {"ImageID": imageID}
+    for latent_idx in range(k):
+        # Collect ImageID-Weight pairs for the current latent semantic
+        image_weight_pairs = []
+        for i, entry in enumerate(database):
+            imageID = entry["imageID"]
+            if reduction_technique == "k-means":
+                distances_to_centers = [np.linalg.norm(image_similarity_matrix[i] - center) for center in
+                                        latent_semantics]
+                weight = distances_to_centers[latent_idx]
+            else:
+                weight = latent_semantics[i][latent_idx]
 
-        if reduction_technique == "k-means":
-            distances_to_centers = [np.linalg.norm(image_similarity_matrix[i] - center) for center in latent_semantics]
-            data_entry["Weights"] = distances_to_centers
-        else:
-            weights = latent_semantics[i]
-            formatted_weights = [float(w) for w in weights]
-            data_entry["Weights"] = formatted_weights
+            image_weight_pairs.append({"ImageID": imageID, "Weight": float(weight)})
 
-        latent_semantics_data.append(data_entry)
+        # Sort the pairs in decreasing order of weights
+        sorted_image_weight_pairs = sorted(image_weight_pairs, key=lambda x: x["Weight"], reverse=True)
+
+        # Print out the sorted pairs for the current latent semantic
+        print(f"\nLatent Semantic {latent_idx + 1}:")
+        for pair in sorted_image_weight_pairs:
+            print(f"ImageID: {pair['ImageID']}, Weight: {pair['Weight']}")
+
+        # Add the sorted pairs to the latent_semantics_data for saving to a file
+        latent_semantics_data.append(sorted_image_weight_pairs)
 
     def default_serialize(o):
         if isinstance(o, np.float32):
@@ -753,39 +758,71 @@ def task_6(feature_space, k, reduction_technique):
 
 
 def task_7(imageID, latent_semantics_file, k):
-    load_features_from_database()
+    if "T3" in latent_semantics_file or "T6" in latent_semantics_file:
+        load_features_from_database()
 
-    # Load the latent semantics from the provided file
-    with open(f"{latent_semantics_file}.json", 'r') as f:
-        latent_semantics_data = json.load(f)
+        # Load the latent semantics from the provided file
+        with open(f"{latent_semantics_file}.json", 'r') as f:
+            latent_semantics_data = json.load(f)
+        latent_semantics_dict = {int(entry["ImageID"]): entry["Weights"] for entry in latent_semantics_data}
 
-    latent_semantics_dict = {int(entry["ImageID"]): entry["Weights"] for entry in latent_semantics_data}
+        # Check if the imageID is present in the latent semantics dictionary
+        if imageID not in latent_semantics_dict:
+            print(f"Latent semantics for ImageID {imageID} not found in the provided file!")
+            return
 
-    # Check if the imageID is present in the latent semantics dictionary
-    if imageID not in latent_semantics_dict:
-        print(f"Latent semantics for ImageID {imageID} not found in the provided file!")
-        return
+        # Retrieve the latent semantics for the given imageID
+        query_latent_semantics = np.array(latent_semantics_dict[imageID])
 
-    # Retrieve the latent semantics for the given imageID
-    query_latent_semantics = np.array(latent_semantics_dict[imageID])
+        # Compute similarities between the query latent semantics and the latent semantics of all images
+        similarities = []
+        for other_image_id, weights in latent_semantics_dict.items():
+            # Skip the query imageID
+            if other_image_id == imageID:
+                continue
+            # print(query_latent_semantics, np.array(weights))
+            similarity = compare_features(query_latent_semantics, np.array(weights))
+            # print(similarity)
+            similarities.append((other_image_id, similarity))
 
-    # Compute similarities between the query latent semantics and the latent semantics of all images
-    similarities = []
-    for other_image_id, weights in latent_semantics_dict.items():
-        # Skip the query imageID
-        if other_image_id == imageID:
-            continue
-        # print(query_latent_semantics, np.array(weights))
-        similarity = compare_features(query_latent_semantics, np.array(weights))
-        # print(similarity)
-        similarities.append((other_image_id, similarity))
+        # Sort images based on similarity
+        sorted_similarities = sorted(similarities, key=lambda x: x[1], reverse=True)[:k]
 
-    # Sort images based on similarity
-    sorted_similarities = sorted(similarities, key=lambda x: x[1], reverse=True)[:k]
+        print("\nSimilar Images under the selected latent space: ")
+        for idx, (matched_imageID, score) in enumerate(sorted_similarities):
+            print(f"{idx}) Image_ID - {matched_imageID}, Score - {score:.4f}")
 
-    print("\nSimilar Images under the selected latent space: ")
-    for idx, (matched_imageID, score) in enumerate(sorted_similarities):
-        print(f"{idx}) Image_ID - {matched_imageID}, Score - {score:.4f}")
+    if "T4" in latent_semantics_file or "T5" in latent_semantics_file:
+        load_features_from_database()
+        with open(f"T3-RESNET-5-k-means.json", 'r') as f:
+            latent_semantics_data = json.load(f)
+        latent_semantics_dict = {int(entry["ImageID"]): entry["Weights"] for entry in latent_semantics_data}
+
+        # Check if the imageID is present in the latent semantics dictionary
+        if imageID not in latent_semantics_dict:
+            print(f"Latent semantics for ImageID {imageID} not found in the provided file!")
+            return
+
+        # Retrieve the latent semantics for the given imageID
+        query_latent_semantics = np.array(latent_semantics_dict[imageID])
+
+        # Compute similarities between the query latent semantics and the latent semantics of all images
+        similarities = []
+        for other_image_id, weights in latent_semantics_dict.items():
+            # Skip the query imageID
+            if other_image_id == imageID:
+                continue
+            # print(query_latent_semantics, np.array(weights))
+            similarity = compare_features(query_latent_semantics, np.array(weights))
+            # print(similarity)
+            similarities.append((other_image_id, similarity))
+
+        # Sort images based on similarity
+        sorted_similarities = sorted(similarities, key=lambda x: x[1], reverse=True)[:k]
+
+        print("\nSimilar Images under the selected latent space: ")
+        for idx, (matched_imageID, score) in enumerate(sorted_similarities):
+            print(f"{idx}) Image_ID - {matched_imageID}, Score - {score:}")
 
     # Create a new figure
     plt.figure(figsize=(15, 5))
@@ -801,7 +838,7 @@ def task_7(imageID, latent_semantics_file, k):
         image = dataset[matched_imageID][0]  # Retrieve the image using the matched_imageID
         plt.subplot(1, k + 1, idx)
         plt.imshow(image)
-        plt.title(f"ID: {matched_imageID}\nScore: {score:.4f}")
+        plt.title(f"ID: {matched_imageID}\nScore: {score:.2f}")
         plt.axis('off')
 
     plt.tight_layout()
@@ -829,10 +866,6 @@ def task_8(imageID, latent_semantics_file, k):
     # Extract the latent semantic corresponding to the given image label
     image_latent_semantic = None
 
-    # if not image_latent_semantic:
-    #     print(f"Latent semantic for label {image_label} not found in the provided file!")
-    #     return
-
     # Compute similarities between the image label latent semantic and the latent semantics of all labels
     similarities = []
     if "T5" in latent_semantics_file:
@@ -853,19 +886,12 @@ def task_8(imageID, latent_semantics_file, k):
         for label, score in sorted_similarities:
             print(f"Label: {label}, Score: {score:.4f}")
 
-    elif "T6" in latent_semantics_file:
+    elif ("T6" in latent_semantics_file) or ("T3" in latent_semantics_file):
         for entry in latent_semantics_data:
             if entry["ImageID"] == imageID:
                 target_weights = entry["Weights"]
                 break
-            # image_latent_semantic = entry["ImageID"][imageID]
-            # break
 
-        # weight_differences = {}
-        # for image in latent_semantics_data:
-        #     if image["ImageID"] != imageID:
-        #         differences = [abs(a - b) for a, b in zip(target_weights, image["Weights"])]
-        #         weight_differences[image["ImageID"]] = differences
         weight_differences = {}
         for image in latent_semantics_data:
             if image["ImageID"] != imageID:
@@ -891,35 +917,56 @@ def task_8(imageID, latent_semantics_file, k):
 
 def task_9(label_id, latent_semantics_file, k):
     # Load the latent semantics from the provided file
-    idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
-    label = idx_to_label_name[int(label_id)]
+    if 'T3' in latent_semantics_file or 'T6' in latent_semantics_file:
+        idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+        label = idx_to_label_name[int(label_id)]
+        with open("T5-RESNET-5-k-means.json", 'r') as f:
+            latent_semantics_data = json.load(f)
 
-    with open(f"{latent_semantics_file}.json", 'r') as f:
-        latent_semantics_data = json.load(f)
+        # Extract the weights for the given label
+        for entry in latent_semantics_data:
+            label_weights = entry["Labels"].get(label)
+            break
 
-    # Extract the weights for the given label
-    for entry in latent_semantics_data:
-        label_weights = entry["Labels"].get(label)
-        break
-    # else:
-    #     print(f"Label {label} not found in the provided latent semantics file!")
-    #     return
+        # Calculate the difference between the given label's weights and all other labels' weights
+        differences = {}
+        for other_label, other_weights in entry["Labels"].items():
+            diff = abs(label_weights - other_weights)
+            differences[other_label] = diff
 
-    # Calculate the difference between the given label's weights and all other labels' weights
-    differences = {}
-    for other_label, other_weights in entry["Labels"].items():
-        diff = abs(label_weights - other_weights)
-        differences[other_label] = diff
+        # Sort labels based on the difference
+        sorted_differences = sorted(differences.items(), key=lambda x: x[1])
 
-    # Sort labels based on the difference
-    sorted_differences = sorted(differences.items(), key=lambda x: x[1])
+        # Display the top k similar labels
+        print(f"\nTop {k} similar labels to {label} under the selected latent space:")
+        for i, (label_name, diff) in enumerate(sorted_differences[:k], start=1):
+            print(f"{i}. {label_name} - Score: {diff:.4f}")
 
-    # Display the top k similar labels
-    print(f"\nTop {k} similar labels to {label} under the selected latent space:")
-    for i, (label_name, diff) in enumerate(sorted_differences[:k], start=1):
-        print(f"{i}. {label_name} - Score: {diff:.4f}")
+    elif "T4" in latent_semantics_file or "T5" in latent_semantics_file:
+        idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
+        label = idx_to_label_name[int(label_id)]
 
-    return sorted_differences[:k]
+        with open(f"{latent_semantics_file}.json", 'r') as f:
+            latent_semantics_data = json.load(f)
+
+        # Extract the weights for the given label
+        for entry in latent_semantics_data:
+            label_weights = entry["Labels"].get(label)
+            break
+
+        # Calculate the difference between the given label's weights and all other labels' weights
+        differences = {}
+        for other_label, other_weights in entry["Labels"].items():
+            diff = abs(label_weights - other_weights)
+            differences[other_label] = diff
+
+        # Sort labels based on the difference
+        sorted_differences = sorted(differences.items(), key=lambda x: x[1])
+
+        # Display the top k similar labels
+        print(f"\nTop {k} similar labels to {label} under the selected latent space:")
+        for i, (label_name, diff) in enumerate(sorted_differences[:k], start=1):
+            print(f"{i}. {label_name} - Score: {diff:.4f}")
 
 
 def task_10(label_id, latent_semantics_file, k):
@@ -927,32 +974,60 @@ def task_10(label_id, latent_semantics_file, k):
     idx_to_label_name = {idx: name for name, idx in label_name_to_idx.items()}
     label = idx_to_label_name[int(label_id)]
 
-    with open(f"{latent_semantics_file}.json", 'r') as f:
-        latent_semantics_data = json.load(f)
+    if "T4" in latent_semantics_file or "T5" in latent_semantics_file:
+        with open(f"{latent_semantics_file}.json", 'r') as f:
+            latent_semantics_data = json.load(f)
 
-    # Extract the weights for the given label
-    for entry in latent_semantics_data:
-        label_weights = entry["Labels"].get(label)
-        break
+        # Extract the weights for the given label
+        for entry in latent_semantics_data:
+            label_weights = entry["Labels"].get(label)
+            break
 
-    for name, idx in label_name_to_idx.items():
-        if name == label:
-            label_idx = idx
+        for name, idx in label_name_to_idx.items():
+            if name == label:
+                label_idx = idx
 
-    # Get the image IDs for the given label from the database
-    cursor.execute("SELECT imageID FROM features WHERE label=?", (label_idx,))
-    image_ids_for_label = [row[0] for row in cursor.fetchall()]
+        # Get the image IDs for the given label from the database
+        cursor.execute("SELECT imageID FROM features WHERE label=?", (label_idx,))
+        image_ids_for_label = [row[0] for row in cursor.fetchall()]
 
-    # Calculate the difference between the given label's weights and all images' weights
-    differences = {}
-    for image_id in image_ids_for_label:
-        cursor.execute("SELECT FCLayer FROM features WHERE imageID=?", (image_id,))
-        image_weights = np.frombuffer(cursor.fetchone()[0], dtype=np.float32)
-        diff = np.linalg.norm(label_weights - image_weights)
-        differences[image_id] = diff
+        # Calculate the difference between the given label's weights and all images' weights
+        differences = {}
+        for image_id in image_ids_for_label:
+            cursor.execute("SELECT FCLayer FROM features WHERE imageID=?", (image_id,))
+            image_weights = np.frombuffer(cursor.fetchone()[0], dtype=np.float32)
+            diff = np.linalg.norm(label_weights - image_weights)
+            differences[image_id] = diff
 
-    # Sort images based on the difference
-    sorted_differences = sorted(differences.items(), key=lambda x: x[1], reverse= True)[:k]
+        # Sort images based on the difference
+        sorted_differences = sorted(differences.items(), key=lambda x: x[1], reverse= True)[:k]
+    elif "T3" or "T6" in latent_semantics_file:
+        with open("T5-RESNET-5-SVD.json", 'r') as f:
+            latent_semantics_data = json.load(f)
+
+        # Extract the weights for the given label
+        for entry in latent_semantics_data:
+            label_weights = entry["Labels"].get(label)
+            break
+
+        for name, idx in label_name_to_idx.items():
+            if name == label:
+                label_idx = idx
+
+        # Get the image IDs for the given label from the database
+        cursor.execute("SELECT imageID FROM features WHERE label=?", (label_idx,))
+        image_ids_for_label = [row[0] for row in cursor.fetchall()]
+
+        # Calculate the difference between the given label's weights and all images' weights
+        differences = {}
+        for image_id in image_ids_for_label:
+            cursor.execute("SELECT FCLayer FROM features WHERE imageID=?", (image_id,))
+            image_weights = np.frombuffer(cursor.fetchone()[0], dtype=np.float32)
+            diff = np.linalg.norm(label_weights - image_weights)
+            differences[image_id] = diff
+
+        # Sort images based on the difference
+        sorted_differences = sorted(differences.items(), key=lambda x: x[1], reverse=True)[:k]
 
     print("\nSimilar Images under the selected latent space: ")
     for idx, (matched_imageID, score) in enumerate(sorted_differences):
@@ -1077,7 +1152,7 @@ elif choice == "2b":
     task_2b(imageID, k)
 
 elif choice == "3":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
     if feature_in == 1:
         feature_space = "ColorMoments"
     elif feature_in == 2:
@@ -1088,6 +1163,8 @@ elif choice == "3":
         feature_space = "Layer3"
     elif feature_in == 5:
         feature_space = "FCLayer"
+    elif feature_in == 6:
+        feature_space = "RESNET"
     else:
         print("Wrong feature space selected!")
         exit()
@@ -1111,7 +1188,7 @@ elif choice == "3":
 
 
 elif choice == "4":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
     if feature_in == 1:
         feature_space = "ColorMoments"
     elif feature_in == 2:
@@ -1122,6 +1199,8 @@ elif choice == "4":
         feature_space = "Layer3"
     elif feature_in == 5:
         feature_space = "FCLayer"
+    elif feature_in == 6:
+        feature_space = "RESNET"
     else:
         print("Wrong feature space selected!")
         exit()
@@ -1130,7 +1209,7 @@ elif choice == "4":
     task_4(feature_space, k)
 
 elif choice == "5":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
     if feature_in == 1:
         feature_space = "ColorMoments"
     elif feature_in == 2:
@@ -1141,6 +1220,8 @@ elif choice == "5":
         feature_space = "Layer3"
     elif feature_in == 5:
         feature_space = "FCLayer"
+    elif feature_in == 6:
+        feature_space = "RESNET"
     else:
         print("Wrong feature space selected!")
         exit()
@@ -1156,6 +1237,8 @@ elif choice == "5":
         reduction_technique = "LDA"
     elif reduction_in == 4:
         reduction_technique = "k-means"
+    elif feature_in == 6:
+        feature_space = "RESNET"
     else:
         print("Invalid choice for reduction technique!")
         exit()
@@ -1163,7 +1246,7 @@ elif choice == "5":
     task_5(feature_space, k, reduction_technique)
 
 elif choice == "6":
-    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n\nEnter feature space: "))
+    feature_in = int(input("1) ColorMoments\n2) HOG\n3) AvgPool\n4) Layer3\n5) FCLayer\n6) RESNET\n\nEnter feature space: "))
     if feature_in == 1:
         feature_space = "ColorMoments"
     elif feature_in == 2:
@@ -1174,6 +1257,8 @@ elif choice == "6":
         feature_space = "Layer3"
     elif feature_in == 5:
         feature_space = "FCLayer"
+    elif feature_in == 6:
+        feature_space = "RESNET"
     else:
         print("Wrong feature space selected!")
         exit()
