@@ -15,3 +15,8 @@ Installation:
 
 System Run:
 To run the system: “python3 main.py”
+
+# Usage Instructions
+1. When started the algorithm, you will be able to input the command in the terminal.
+2. Please follow the instructions in the command line for each task.
+3. 
