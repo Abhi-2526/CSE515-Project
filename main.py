@@ -1536,11 +1536,13 @@ def task_11_extra(label_src = "", m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_cu
     sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True) # rank pageranke score by larege-smaller
 
     key_list = []
+    score_list = []
 
     for i in range(1, value_m+1):
         id, pagescore = sorted_images[i+1]
         if not isinstance(id, types.BuiltinFunctionType):
             key_list.append(str(id))
+            score_list.append(pagescore)
             print(sorted_images[i]) # 0(itself), so we start with 12345
 
     print("finished!")
@@ -1564,21 +1566,23 @@ def task_11_extra(label_src = "", m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_cu
 
     if not value_m % 2 == 0:
         for j in range(value_m):
-            plt.subplot(1, value_m, counter) # 1 row
+            ax = plt.subplot(1, value_m, counter) # 1 row
             if mode in ["HOGs" or "moments"] :
                 print("Please choose other mods...")
                     # plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
             elif mode in ["FC", "T3-CM-5-SVD"]:
                 selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                 plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+            ax.set_title("{}, {}".format(int(key_list[counter-1]), round(score_list[counter-1], 4)), fontsize=8)
             counter += 1 
+
             
             plt.axis('off')
             plt.tight_layout()
     else:
         for i in range(2):
             for j in range(int(value_m/2)):
-                plt.subplot(2, int(value_m/2), counter)
+                ax = plt.subplot(2, int(value_m/2), counter)
                 print(counter)
                 if mode in ["HOGs" or "moments"] :
                     print("Please choose other mods...")
@@ -1586,6 +1590,8 @@ def task_11_extra(label_src = "", m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_cu
                 elif mode in ["FC", "T3-CM-5-SVD"]:
                     selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                     plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+                
+                ax.set_title("{}, {}".format(int(key_list[counter-1]), round(score_list[counter-1], 4)), fontsize=8)
 
                 counter += 1 
                 plt.axis('off')
