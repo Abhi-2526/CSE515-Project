@@ -1263,6 +1263,9 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
     plt.imshow(img)
     print(img.shape)
     plt.show()
+
+    support_latent_list = ["T3-CM-5-SVD", "T3-HOG-5-LDA", "T3-HOG-5-SVD" , "T3-CM-10-LDA", "T3-CM-10-SVD",
+                     "T3-HOG-10-LDA", "T3-HOG-1-LDA", "T3-HOG-1-SVD", "FC"]
     
     if use_current_graph:
         G = nx.read_gexf(exist_graph_path)
@@ -1270,8 +1273,6 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
         # Create a graph.
         G = nx.Graph()
         # target_description = descriptor_fun(input_path)
-        support_latent_list = ["T3-CM-5-SVD", "T3-HOG-5-LDA", "T3-HOG-5-SVD" , "T3-CM-10-LDA", "T3-CM-10-SVD",
-                     "T3-HOG-10-LDA", "T3-HOG-1-LDA", "T3-HOG-1-SVD"]
         
         if mode == "HOGs":
             data = torch.load("/Users/danielsmith/Documents/1-RL/ASU/courses/23Fall/CSE515/project/phase1/caltech-101/dataset/rgb_data_HOGs.pt")
@@ -1355,49 +1356,56 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
     # alpha (damping factor) is set to 0.85, 
     # means that there is a 15% chance that the random walker will teleport to any node in the graph with equal probability
     # and an 85% chance that the walker will follow outgoing links to other nodes in the graph.
-
+    # personalized_teleport_vector = {image: 0.0 for image, _ in data}
+    # personalized_teleport_vector[label] = 1.0
     # pagerank_scores = nx.pagerank(G, personalization=personalized_teleport_vector)
     pagerank_scores = nx.pagerank(G)
 
     sorted_images = sorted(pagerank_scores.items(), key=lambda x: x[1], reverse=True) # rank pageranke score by larege-smaller
 
     key_list = []
+    score_list = []
 
     for i in range(1, value_m+1):
         id, pagescore = sorted_images[i+1]
         if not isinstance(id, types.BuiltinFunctionType):
             key_list.append(str(id))
+            score_list.append(pagescore)
             print(sorted_images[i]) # 0(itself), so we start with 12345
 
     print("finished!")
 
 
-    plt.figure(figsize=(10, 3))
+    fig = plt.figure(figsize=(10, 3))
 
     counter = 1
 
     if not value_m % 2 == 0:
         for j in range(value_m):
-            plt.subplot(1, value_m, counter) # 1 row
+            ax = plt.subplot(1, value_m, counter) # 1 row
             if mode in ["HOGs" or "moments"] :
                     plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
             elif mode in support_latent_list:
                 selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                 plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+            # plt.title("Id {}".format(selected_label))
+            ax.set_title("{}, {}".format(int(key_list[counter-1]), round(score_list[counter-1], 4)), fontsize=8)
+
             counter += 1 
-            
             plt.axis('off')
             plt.tight_layout()
     else:
         for i in range(2):
             for j in range(int(value_m/2)):
-                plt.subplot(2, int(value_m/2), counter)
+                ax = plt.subplot(2, int(value_m/2), counter)
                 print(counter)
                 if mode in ["HOGs" or "moments"] :
                     plt.imshow(imread(base_path+str(key_list[counter-1]+".png")))
                 elif mode in support_latent_list:
                     selected_image, selected_label = caltech101_dataset[int(key_list[counter-1])]
                     plt.imshow(np.transpose(selected_image, (1, 2, 0)))
+                
+                ax.set_title("({}, {})".format(int(key_list[counter-1]), round(score_list[counter-1], 4)), fontsize=8)
 
                 counter += 1 
                 plt.axis('off')
@@ -1406,6 +1414,7 @@ def task_11(label_id = 0, m = 5, n = 10, in_mode = "T3-CM-5-SVD", use_current_gr
     current_time = datetime.datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     if not os.path.exists("./data/output/"):
         os.makedirs("./data/output/")
+    fig.suptitle(str(mode) + " for label: "+str(image_id) + " (label_id, pageranke score)", fontsize=10)
     plt.savefig("./data/output/mode"+str(mode)+"_"+"l"+str(image_id)+"_"+"n"+str(value_n-1)+"_"+"m"+str(value_m)+current_time+".png")
     # Show the entire figure with subplots
     plt.show()
